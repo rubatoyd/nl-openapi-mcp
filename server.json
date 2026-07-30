@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.json",
   "name": "io.github.rubato103/nl-openapi-mcp",
-  "title": "National Library of Korea Seoji OpenAPI (국립중앙도서관 국가서지 OpenAPI)",
-  "description": "Search and collect Korean academic bibliography, books, and literature metadata from the National Library of Korea Seoji OpenAPI — MCP server + CLI.",
+  "title": "National Library of Korea Seoji OpenAPI MCP Server",
+  "description": "National Library of Korea Seoji OpenAPI MCP server and CLI for Korean bibliographic literature.",
   "version": "0.1.0",
   "repository": {
     "type": "git",
