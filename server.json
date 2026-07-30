@@ -1,31 +1,29 @@
 {
-  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.rubato103/nl-openapi-mcp",
-  "title": "National Library of Korea Seoji OpenAPI MCP Server",
-  "description": "National Library of Korea Seoji OpenAPI MCP server and CLI for Korean bibliographic literature.",
+  "description": "National Library of Korea Seoji OpenAPI search via REST API and local metadata harvesting",
   "version": "0.1.0",
   "repository": {
-    "type": "git",
-    "url": "https://github.com/rubato103/nl-openapi-mcp"
+    "url": "https://github.com/rubato103/nl-openapi-mcp",
+    "source": "github"
   },
-  "author": {
-    "name": "Yeondong Yang",
-    "email": "rubato103@gmail.com"
-  },
-  "license": "MIT",
-  "keywords": ["mcp", "nl", "seoji", "openapi", "national-library", "academic", "bibliography", "metadata"],
+  "websiteUrl": "https://github.com/rubato103/nl-openapi-mcp",
   "packages": [
     {
-      "registryType": "pypi",
-      "identifier": "nl-openapi-mcp",
-      "version": "0.1.0"
-    }
-  ],
-  "remotes": [
-    {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/rubato103/nl-openapi-mcp", "nl-mcp"]
+      "registryType": "mcpb",
+      "identifier": "https://github.com/rubato103/nl-openapi-mcp/releases/download/v0.1.0/nl-openapi-mcp.mcpb",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "fileSha256": "__MCPB_SHA256__",
+      "environmentVariables": [
+        {
+          "name": "NL_API_KEY",
+          "description": "National Library Seoji OpenAPI key (issued at librarian.nl.go.kr)",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
     }
   ]
 }
