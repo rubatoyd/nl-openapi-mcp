@@ -1,0 +1,76 @@
+{
+  "manifest_version": "0.3",
+  "name": "nl-openapi-mcp",
+  "display_name": "국립중앙도서관 국가서지 검색기 (nl-openapi-mcp)",
+  "version": "0.1.0",
+  "description": "국립중앙도서관 국가서지 OpenAPI(seojiSearch.do) 학술서지·문헌 검색 및 수집기 — MCP 서버 + CLI. xlsx/csv/json/sqlite 내보내기",
+  "author": {
+    "name": "Yeondong Yang",
+    "url": "https://github.com/rubato103/nl-openapi-mcp"
+  },
+  "homepage": "https://github.com/rubato103/nl-openapi-mcp",
+  "documentation": "https://github.com/rubato103/nl-openapi-mcp#readme",
+  "license": "MIT",
+  "keywords": [
+    "nl",
+    "seoji",
+    "openapi",
+    "academic",
+    "literature",
+    "metadata",
+    "bibliography"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "uvx",
+    "mcp_config": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/rubato103/nl-openapi-mcp",
+        "nl-mcp"
+      ],
+      "env": {
+        "NL_API_KEY": "${user_config.api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "국립중앙도서관 OpenAPI 인증키",
+      "description": "librarian.nl.go.kr 발급 OpenAPI 키. NL_API_KEY로 주입됩니다.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "nl_status",
+      "description": "OpenAPI 통신 연결 및 API 키 설정 상태 점검"
+    },
+    {
+      "name": "nl_search",
+      "description": "서지정보 일반/상세 검색 — title/author/publisher/keyword/isbn 등 상세 필터 지원"
+    },
+    {
+      "name": "nl_detail",
+      "description": "Control Number(rawid) 또는 표제로 단일 서지 상세 정보 조회"
+    },
+    {
+      "name": "nl_collect",
+      "description": "다중 페이지 서지 데이터 수집 후 xlsx/csv/json/sqlite 로컬 파일 즉시 저장"
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

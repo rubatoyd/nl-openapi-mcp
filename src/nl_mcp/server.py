@@ -192,3 +192,13 @@ def nl_collect(
         "output_path": saved_path,
         "message": f"{len(records)}건의 서지 정보를 '{saved_path}'에 저장했습니다.",
     }
+
+
+def main() -> None:
+    """Entry point for running the MCP server."""
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
+
