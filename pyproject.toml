@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nl-openapi-mcp"
+version = "0.1.0"
+description = "MCP server + CLI for National Library of Korea Seoji OpenAPI — academic bibliography & literature metadata harvester"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Yeondong Yang" }]
+keywords = ["mcp", "nl", "seoji", "openapi", "national-library", "academic", "literature", "metadata", "kci"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: Indexing",
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "requests>=2.31.0",
+    "openpyxl>=3.1.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+]
+
+[project.scripts]
+nl-mcp = "nl_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rubato103/nl-openapi-mcp"
+Repository = "https://github.com/rubato103/nl-openapi-mcp.git"
+Issues = "https://github.com/rubato103/nl-openapi-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nl_mcp"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+pythonpath = ["src"]

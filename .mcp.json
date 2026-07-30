@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nl": {
+      "command": "uvx",
+      "args": ["--from", ".", "nl-mcp"],
+      "env": {
+        "NL_API_KEY": "${NL_API_KEY}"
+      }
+    }
+  }
+}
