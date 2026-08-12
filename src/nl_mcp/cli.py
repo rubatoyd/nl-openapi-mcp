@@ -70,9 +70,9 @@ def cmd_collect(args) -> int:
     if not terms:
         return _err("검색어가 없습니다 — --kwd 또는 --terms 를 주세요.")
     max_records = args.max
-    if args.auto_partition and max_records <= API_RECORD_CAP:
+    if (args.auto_partition or args.sort_depth) and max_records <= API_RECORD_CAP:
         # MCP 도구와 같은 처리 — 상한 이하면 분할해도 담을 자리가 없다
-        print(f"※ --auto-partition 이므로 최대 수집 건수를 {max_records} → "
+        print(f"※ 상한 우회 옵션이 켜져 최대 수집 건수를 {max_records} → "
               f"{API_RECORD_CAP * 12} 로 올립니다.")
         max_records = API_RECORD_CAP * 12
     try:
@@ -82,6 +82,7 @@ def cmd_collect(args) -> int:
             contains=args.contains, max_records=max_records,
             auto_partition=args.auto_partition,
             partition_depth=max(1, min(args.partition_depth, 3)),
+            sort_depth=max(0, min(args.sort_depth, 5)),
             **({"exact": True} if args.exact else {}))
     except NlError as e:
         return _err(f"수집 오류: {e}")
@@ -131,6 +132,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "(실측 회복 7%%→67%%). 호출 수가 는다")
     c.add_argument("--partition-depth", type=int, default=2, dest="partition_depth",
                    help="분할 깊이 1~3 (기본 2). 깊을수록 많이 받지만 호출도 는다")
+    c.add_argument("--sort-depth", type=int, default=0, dest="sort_depth",
+                   help="정렬 뒤집기 0~5 (기본 0=끄기). 같은 검색식을 정렬 순서만 바꿔 다시 훑는다. "
+                        "asc/desc 교집합이 0이라 분할보다 훨씬 싸다 (실측 1,856건 → 7요청 94%%)")
     c.add_argument("--exact", action="store_true",
                    help="큰따옴표 구문검색. ⚠️ 재현율 손실이 커(평균 47%%) 코퍼스 수집에는 부적합")
     c.add_argument("--format", nargs="+", default=None,

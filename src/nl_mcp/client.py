@@ -19,6 +19,7 @@ from .config import (
     MAX_PAGE_SIZE,
     PARTITION_AXES,
     SEARCH_API_URL,
+    SORT_FIELDS,
     require_api_key,
     use_os_trust,
 )
@@ -232,10 +233,92 @@ class NlClient:
         """레코드만 반환하는 얇은 래퍼. 절단 여부까지 필요하면 search_meta() 를 쓴다."""
         return self.search_meta(kwd, **kw)[0]
 
+    # ── 정렬 뒤집기 — 같은 검색식을 여러 순서로 훑어 합집합 ────────────────────
+    def search_sweep_meta(self, kwd: str, *, sort_depth: int = 1, sort_fields=None,
+                          max_records: int = API_RECORD_CAP * 4,
+                          page_size: int = MAX_PAGE_SIZE, initial=None, **extra
+                          ) -> tuple[list[Holding], dict]:
+        """같은 검색식을 **정렬 순서만 바꿔가며** 여러 번 훑어 합집합을 만든다.
+
+        ✅ 실측 근거(2026-08-12): `sort=<색인필드>` + `order=asc|desc` 가 동작하고,
+           **`asc` 와 `desc` 의 교집합이 0건**이다 — 정렬축 하나가 상한을 사실상 2배로 늘린다.
+           `교육복지`/`도서`(1,856건): 무정렬 500 → +`ipub_year` 1,247 → +`ititle` 1,558
+           → +`iauthor` **1,746(94%)**, 단 **7요청**.
+
+        분할 축(`category` 등)과 **직교한다** — 저쪽은 검색 공간을 값으로 쪼개고,
+        이쪽은 같은 조각을 다른 순서로 다시 긁는다. 그래서 함께 쓸 수 있다.
+
+        sort_depth: 사용할 정렬 필드 수(0=끄기). 필드당 asc·desc 2회를 더 쓴다.
+        ⚠️ 상한에 걸리지 않은 검색식은 1회로 끝난다 — 훑을 이유가 없기 때문이다(호출 절약).
+        """
+        fields = list(sort_fields if sort_fields is not None else SORT_FIELDS)[:max(0, sort_depth)]
+        out: list[Holding] = []
+        seen: set[str] = set()
+        passes: list[dict] = []
+        requests = 0
+        total = 0
+
+        def scrape(label: str, sort_kw: dict, seed=None) -> dict:
+            nonlocal requests, total
+            if seed is not None:
+                recs, m = seed              # 이미 받아둔 결과를 첫 패스로 재사용
+            else:
+                recs, m = self.search_meta(
+                    kwd, max_records=min(API_RECORD_CAP, max_records - len(out)),
+                    page_size=page_size, **sort_kw, **extra)
+                requests += m["requests"]
+            total = m["total"] or total
+            new = 0
+            for h in recs:
+                k = h.dedup_key()
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(h)
+                new += 1
+            p = {"pass": label, "fetched": m["fetched"], "new": new, "cap_hit": m["cap_hit"]}
+            passes.append(p)
+            return {**p, "meta": m}
+
+        first = scrape("(정렬 없음)", {}, seed=initial)
+        # 상한에 안 걸렸으면 이미 전수다 — 더 훑을 이유가 없다
+        if first["cap_hit"]:
+            for f in fields:
+                for order in ("asc", "desc"):
+                    if len(out) >= max_records or (total and len(out) >= total):
+                        break
+                    scrape(f"{f}/{order}", {"sort": f, "order": order})
+                    time.sleep(self.throttle)
+                if total and len(out) >= total:
+                    break
+
+        out = out[:max_records]
+        meta = {
+            "term": kwd,
+            "mode": "sort_sweep",
+            "total": total,
+            "fetched": len(out),
+            "returned": len(out),
+            "truncated": bool(total) and len(out) < total,
+            "cap_hit": bool(total) and total > API_RECORD_CAP,
+            "sort_passes": passes,
+            "sort_fields_used": fields if first["cap_hit"] else [],
+            "requests": requests,
+            "api_record_cap": API_RECORD_CAP,
+        }
+        if meta["truncated"]:
+            meta["warning"] = (
+                f"⚠️ 정렬 뒤집기로 {len(out):,}건까지 회수했으나 전수가 아닙니다 "
+                f"(전체 {total:,}건, 도달불가 {total - len(out):,}건). "
+                f"정렬축을 더 쓰거나(sort_depth 상향) `auto_partition` 과 함께 쓰세요."
+            )
+        return out, meta
+
     # ── 다축 재귀 분할 — 500 상한을 부분적으로 우회 ───────────────────────────
     def search_partitioned_meta(self, kwd: str, *, axes=None, max_depth: int = 2,
                                 max_records: int = API_RECORD_CAP * 12,
                                 page_size: int = MAX_PAGE_SIZE, initial_root=None,
+                                sort_depth: int = 0,
                                 **extra) -> tuple[list[Holding], dict]:
         """서버측 축으로 검색 공간을 **재귀 분할**해 500 상한을 넘겨 회수한다.
 
@@ -284,11 +367,19 @@ class NlClient:
             nonlocal requests
             if len(out) >= max_records:
                 return
-            if seed is not None:
+            budget = max_records - len(out)
+            if sort_depth > 0:
+                # 정렬 뒤집기는 분할 축과 **직교**한다 — 각 조각을 여러 순서로 다시 긁는다.
+                # 상한에 안 걸린 조각은 sweep 내부에서 1회로 끝나므로 낭비가 없다.
+                recs, m = self.search_sweep_meta(
+                    kwd, sort_depth=sort_depth, max_records=budget,
+                    page_size=page_size, initial=seed, **fixed, **extra)
+                requests += m["requests"]
+            elif seed is not None:
                 recs, m = seed
             else:
                 recs, m = self.search_meta(
-                    kwd, max_records=min(API_RECORD_CAP, max_records - len(out)),
+                    kwd, max_records=min(API_RECORD_CAP, budget),
                     page_size=page_size, **fixed, **extra)
                 requests += m["requests"]
             new = take(recs)
@@ -409,6 +500,7 @@ class NlClient:
                           page_size: int = MAX_PAGE_SIZE, contains=None,
                           year_from: int | None = None, year_to: int | None = None,
                           auto_partition: bool = False, partition_depth: int = 2,
+                          sort_depth: int = 0,
                           **extra) -> tuple[list[Holding], dict]:
         """여러 검색어를 **각각 조회해 합집합** + 축별 회수 메타.
 
@@ -433,22 +525,33 @@ class NlClient:
         axes: list[dict] = []
         stopped_early = False
         partitioned: list[str] = []
+        swept: list[str] = []
 
         for term in terms:
-            recs, m = self.search_meta(
-                term, srch_target=srch_target, category=category,
-                max_records=max_records, page_size=page_size, **extra)
+            if sort_depth > 0:
+                # 정렬 뒤집기만으로도 상한을 크게 넘긴다(실측 1,856건 → 7요청 94%).
+                recs, m = self.search_sweep_meta(
+                    term, sort_depth=sort_depth, srch_target=srch_target,
+                    category=category, max_records=max_records, page_size=page_size, **extra)
+                swept.append(term) if m.get("sort_fields_used") else None
+            else:
+                recs, m = self.search_meta(
+                    term, srch_target=srch_target, category=category,
+                    max_records=max_records, page_size=page_size, **extra)
 
             # 500 상한에 걸렸고 자료구분을 지정하지 않았다면, 자료구분별로 나눠 다시 받는다.
             # (자료구분은 겹치지 않는 완전 분할임이 실측 확인됐다 — search_by_category_meta 참조)
             # ⚠️ `max_records` 가 상한 이하면 분할해봐야 결과가 어차피 잘린다 —
             #    수십 번의 호출만 낭비하므로 아예 시도하지 않고 경고로 원인을 알린다.
-            if (auto_partition and m["cap_hit"] and not category
-                    and max_records > API_RECORD_CAP):
+            # ⚠️ `category` 가 지정돼 있어도 분할한다 — 그 축만 건너뛰고 `manageName`·`licYn`
+            #    으로 쪼갠다(코드 리뷰 ④ 수정으로 preset 축 건너뛰기가 가능해졌다).
+            #    이전에는 `not category` 가드가 이 경로를 통째로 막고 있었다.
+            if auto_partition and m["cap_hit"] and max_records > API_RECORD_CAP:
                 p_recs, p_meta = self.search_partitioned_meta(
-                    term, srch_target=srch_target, max_depth=partition_depth,
+                    term, srch_target=srch_target, category=category,
+                    max_depth=partition_depth,
                     max_records=max(max_records - len(out), API_RECORD_CAP + 1),
-                    page_size=page_size,
+                    page_size=page_size, sort_depth=sort_depth,
                     # 방금 받은 루트 조각을 씨앗으로 넘긴다 — 같은 요청을 두 번 보내지 않는다
                     initial_root=(recs, m), **extra)
                 if len(p_recs) > len(recs):      # 실제로 이득일 때만 교체
@@ -486,6 +589,7 @@ class NlClient:
             "api_record_cap": API_RECORD_CAP,
             "cap_hit_terms": [a["term"] for a in axes if a["cap_hit"]],
             "partitioned_terms": partitioned,
+            "sort_swept_terms": swept,
             "truncated": bool(stopped_early or len(axes) < len(terms)
                               or any(a["truncated"] for a in axes)),
         }
@@ -520,7 +624,7 @@ class NlClient:
                        f"— 검색어를 더 좁히거나 partition_depth 를 올리세요. "
                        if labels else "")
                 )
-            elif auto_partition and not category:
+            elif auto_partition:
                 # 분할을 켰는데 아무 일도 안 일어난 경우 — 원인을 정확히 짚어준다
                 warns.append(
                     f"⚠️ `auto_partition=True` 인데 분할이 일어나지 않았습니다"

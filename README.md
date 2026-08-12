@@ -32,7 +32,20 @@ xlsx/csv/json/sqlite 로 내보냅니다.
 | `cap_hit` | `total` > 500 — **API 가 더 안 줌** | `max_records` 로는 불가 (아래 참조) |
 | `meta.cap_hit_terms` | 상한에 걸린 검색어 목록 | 그 검색어만 세분화 |
 
-### 상한을 넘겨 모으는 두 가지 방법
+### 상한을 넘겨 모으는 방법 — 함께 쓰면 **전수 수집이 됩니다**
+
+`교육복지`/`도서`(1,856건) 라이브 실측:
+
+| 설정 | 회수 | 비율 | 요청 |
+|---|---:|---:|---:|
+| 우회 없음 | 500 | 27% | 1 |
+| `sort_depth=3` | 1,746 | 94% | 7 |
+| **`auto_partition=True` + `sort_depth=1`** | **1,854** | **100%** | 24 |
+
+**`sort_depth` 가 비용 대비 효과가 압도적입니다** — 같은 검색식을 정렬 순서만 바꿔 다시 훑는데,
+`asc` 와 `desc` 의 교집합이 **0건**이라 정렬축 하나가 상한을 사실상 2배로 늘립니다.
+분할(`auto_partition`)과 **직교**하므로 함께 쓸 수 있습니다.
+
 
 **① `auto_partition=True` — 서버측 축으로 재귀 분할**
 
@@ -65,11 +78,9 @@ xlsx/csv/json/sqlite 로 내보냅니다.
 > 서버측 연도 범위 필터는 확인되지 않았습니다(11개 후보 무시).
 
 > 🔴 **정정(2026-08-12)** — 이전 판에서 "정렬은 존재하지 않습니다"라고 적었으나 **틀렸습니다.**
-> `sort=ipub_year&order=asc|desc` 가 동작하며, **asc 와 desc 의 교집합이 0건**이라
-> 상한 우회에 매우 효과적입니다(1,856건 질의를 **7요청으로 94%** 회수).
-> `detailSearch=true`+`f1/v1/and1` 로 **필드 간 AND/OR/NOT** 도 됩니다(`AND+NOT=부모` 검산 통과).
-> 둘 다 **아직 코드에 반영하지 않았습니다** — 현재 `auto_partition` 은 자료구분 계열 축만 씁니다.
-> 자세한 내용 → [docs/NL_API_GUIDE.md §1-4-b·§1-6·§3-3](docs/NL_API_GUIDE.md)
+> `sort=ipub_year&order=asc|desc` 가 동작합니다 → `sort_depth` 로 구현했습니다(위 표).
+> `detailSearch=true`+`f1/v1/and1` 로 **필드 간 AND/OR/NOT** 도 됩니다(`AND+NOT=부모` 검산 통과) —
+> 이쪽은 아직 미구현입니다. 자세한 내용 → [docs/NL_API_GUIDE.md §1-4-b·§1-6·§3-3](docs/NL_API_GUIDE.md)
 
 ---
 
@@ -182,8 +193,11 @@ nl status
 nl search 교육불평등 --category 도서 --rows 20
 nl collect --terms 교육불평등 교육격차 학력격차 --category 도서 --format xlsx json
 
-# 500 상한을 넘겨 모으기 (MCP 의 auto_partition 과 동일)
-nl collect --kwd 교육복지 --auto-partition --partition-depth 3 --format xlsx
+# 500 상한을 넘겨 모으기 — 정렬 뒤집기가 가장 값싸다 (7요청에 94%)
+nl collect --kwd 교육복지 --category 도서 --sort-depth 3 --format xlsx
+
+# 분할과 함께 쓰면 전수 수집 (실측 100%)
+nl collect --kwd 교육복지 --category 도서 --auto-partition --sort-depth 1 --format xlsx
 ```
 
 ---

@@ -203,14 +203,21 @@ def test_호출자가_고정한_축은_다시_쪼개지_않는다(client):
         assert call.get("category") == "도서"
 
 
-def test_category_를_지정했으면_분할하지_않는다(client):
-    """이미 자료구분을 고른 상태에서는 더 쪼갤 축이 없다."""
+def test_category_를_지정해도_남은_축으로_분할한다(client):
+    """이전에는 `not category` 가드가 이 경로를 통째로 막았다.
+
+    코드 리뷰 ④ 수정으로 preset 축 건너뛰기가 가능해졌으므로, `category=도서` 로
+    이미 골랐어도 `manageName`·`licYn` 으로는 계속 쪼갤 수 있다.
+    라이브 확인: 교육복지/도서 500 → 1,600건(86%).
+    """
     c = client()
     recs, meta = c.search_terms_meta(["교육복지"], category="도서",
-                                     max_records=10_000, auto_partition=True)
-    assert len(recs) == API_RECORD_CAP
-    assert meta["partitioned_terms"] == []
-    assert "검색어를 더 좁게" in meta["warning"]
+                                     max_records=99_999, auto_partition=True)
+    assert len(recs) > API_RECORD_CAP
+    assert meta["partitioned_terms"] == ["교육복지"]
+    used = {k for call in c._fake.calls for k in ("manageName", "licYn") if call.get(k)}
+    assert "manageName" in used
+    assert all(call.get("category") == "도서" for call in c._fake.calls)
 
 
 def test_상한에_안_걸리면_분할하지_않는다(client):
@@ -363,3 +370,104 @@ def test_CLI_에_분할_구문검색_인자가_있다():
     assert ns.auto_partition is True and ns.partition_depth == 3 and ns.exact is True
     d = build_parser().parse_args(["collect", "--kwd", "x"])
     assert d.auto_partition is False and d.partition_depth == 2 and d.exact is False
+
+
+# ══ 정렬 뒤집기 (sort sweep) ══════════════════════════════════════════════════
+class SortServer(CategoryServer):
+    """정렬을 흉내낸다 — asc/desc 가 서로 **겹치지 않는** 구간을 준다(실측 asc∩desc=0)."""
+
+    def __call__(self, params):
+        self.calls.append(dict(params))
+        hits = self._match(params)
+        total = len(hits)
+        s, o = params.get("sort"), params.get("order")
+        if s in ("ipub_year", "ititle", "iauthor", "ipublisher", "iregdate"):
+            # 정렬축마다 다른 순서 → 상한 구간이 달라진다
+            hits = sorted(hits, key=lambda r: (hash(s + r["id"]) % 100_000),
+                          reverse=(o == "desc"))
+        page, size = int(params["pageNum"]), int(params["pageSize"])
+        start, end = (page - 1) * size, min(page * size, total, API_RECORD_CAP)
+        if start >= min(total, API_RECORD_CAP):
+            return json.dumps({"total": total, "sort": s or ""}, ensure_ascii=False)
+        recs = [{**samples.OFFLINE_FULL, "id": r["id"], "manageName": r["manageName"],
+                 "licYn": r["licYn"]} for r in hits[start:end]]
+        return json.dumps({"total": total, "result": recs}, ensure_ascii=False)
+
+
+@pytest.fixture
+def sort_client(monkeypatch):
+    def make(per=None):
+        c = NlClient(api_key="k", throttle=0)
+        fake = SortServer(per if per is not None else {"도서": 1856})
+        monkeypatch.setattr(c, "_call", fake)
+        c._fake = fake
+        return c
+    return make
+
+
+def test_정렬_뒤집기가_상한을_넘긴다(sort_client):
+    """실측: 교육복지/도서 1,856건을 500 → sort_depth=3 으로 1,746건(94%), 7요청."""
+    c = sort_client()
+    recs, meta = c.search_sweep_meta("교육복지", sort_depth=3, category="도서",
+                                     max_records=99_999)
+    assert len(recs) > API_RECORD_CAP
+    assert meta["mode"] == "sort_sweep"
+    assert len(meta["sort_fields_used"]) == 3
+    assert meta["requests"] == len(meta["sort_passes"])
+
+
+def test_상한에_안_걸리면_훑지_않는다(sort_client):
+    """호출 낭비 방지 — 전수를 이미 받았으면 정렬을 바꿔 다시 긁을 이유가 없다."""
+    c = sort_client({"도서": 120})
+    recs, meta = c.search_sweep_meta("작은검색어", sort_depth=5, category="도서",
+                                     max_records=99_999)
+    assert len(recs) == 120
+    assert meta["sort_fields_used"] == []          # 정렬축을 하나도 쓰지 않았다
+    assert meta["requests"] == 1
+    assert len(meta["sort_passes"]) == 1
+
+
+def test_전수를_채우면_조기_종료한다(sort_client):
+    """total 에 도달하면 남은 정렬축을 더 쓰지 않는다."""
+    c = sort_client({"도서": 700})
+    recs, meta = c.search_sweep_meta("중간검색어", sort_depth=5, category="도서",
+                                     max_records=99_999)
+    assert len(recs) == 700
+    assert meta["truncated"] is False
+    assert len(meta["sort_fields_used"]) <= 5
+    assert meta["requests"] < 11                   # 5축 전부(11회) 쓰기 전에 끝났다
+
+
+def test_정렬_뒤집기와_분할을_함께_쓸_수_있다(sort_client):
+    """둘은 직교한다 — 축으로 쪼갠 뒤 각 조각을 다시 훑는다.
+
+    라이브 확인: 교육복지/도서 1,856건을 auto_partition2 + sort1 로 **100% 전수** 회수.
+    """
+    c = sort_client()
+    recs, meta = c.search_terms_meta(["교육복지"], category="도서", max_records=99_999,
+                                     auto_partition=True, sort_depth=1)
+    only_part = SortServer({"도서": 1856})
+    c2 = NlClient(api_key="k", throttle=0)
+    c2._call = only_part
+    recs2, _ = c2.search_terms_meta(["교육복지"], category="도서", max_records=99_999,
+                                    auto_partition=True)
+    assert len(recs) > len(recs2)                  # 정렬을 더하면 더 받는다
+
+
+def test_sort_depth_가_도구와_CLI_에_노출된다():
+    import inspect
+    assert inspect.signature(srv.nl_collect).parameters["sort_depth"].default == 0
+    doc = srv.nl_collect.__doc__
+    assert "정렬 뒤집기" in doc and "94%" in doc
+    from nl_mcp.cli import build_parser
+    ns = build_parser().parse_args(["collect", "--kwd", "x", "--sort-depth", "3"])
+    assert ns.sort_depth == 3
+
+
+def test_검증된_정렬필드만_쓴다():
+    from nl_mcp.config import SORT_FIELDS
+    assert SORT_FIELDS[0] == "ipub_year"           # 실측 회복량이 가장 큰 축을 먼저
+    for f in SORT_FIELDS:
+        assert f.startswith("i")                   # 색인 필드명 규칙
+    assert "ikdc" not in SORT_FIELDS               # 실측 무시됨
+    assert "pub_year" not in SORT_FIELDS           # i 없는 이름은 무시됨

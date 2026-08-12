@@ -149,7 +149,7 @@ def nl_search(kwd: str, srch_target: str = "title", exact: bool = False,
 def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
                srch_target: str = "title", exact: bool = False,
                category: str | None = None, auto_partition: bool = False,
-               partition_depth: int = 2,
+               partition_depth: int = 2, sort_depth: int = 0,
                year_from: int | None = None, year_to: int | None = None,
                contains: list[str] | None = None, formats: list[str] | None = None,
                max_records: int = 500, out_dir: str | None = None,
@@ -176,6 +176,12 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
       ⚠️ 호출 수가 함께 는다(13 → 25 → 60회). 깊이 3은 코퍼스 전수성이 중요할 때만.
       ⚠️ **전수는 여전히 불가능하다.** `meta.axes[].partition.unreachable` 과
          `still_capped` 가 못 받은 건수와 남은 조각을 보고한다.
+    sort_depth: **정렬 뒤집기**(0~5, 기본 0=끄기). 같은 검색식을 정렬 순서만 바꿔 다시 훑는다.
+      `asc` 와 `desc` 의 교집합이 **0건**이라(실측) 정렬축 하나가 상한을 사실상 2배로 늘린다.
+      실측(`교육복지`/`도서` 1,856건): 500 → `ipub_year` 1,247 → `+ititle` 1,558
+      → `+iauthor` **1,746(94%)**, 단 **7요청**. **분할보다 훨씬 싸다.**
+      `auto_partition` 과 **함께 쓸 수 있다**(축을 쪼갠 뒤 각 조각을 다시 훑는다).
+      ⚠️ 상한에 걸리지 않은 검색식은 훑지 않는다(호출 낭비 없음).
     contains: 결과 텍스트 부분일치 후처리. year_from/year_to: 발행연도 필터.
     formats: xlsx/csv/json/sqlite (기본 3종). save=false 면 저장 없이 미리보기만.
     out_dir 미지정 시 홈의 nl-output/. extra_params: 임의 API 파라미터 전달.
@@ -206,6 +212,7 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
         recs, meta = NlClient().search_terms_meta(
             kws, srch_target=srch_target, category=category,
             auto_partition=auto_partition, partition_depth=max(1, min(partition_depth, 3)),
+            sort_depth=max(0, min(sort_depth, 5)),
             year_from=year_from, year_to=year_to, contains=contains,
             max_records=max_records, **extra)
     except NlError as e:

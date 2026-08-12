@@ -69,6 +69,17 @@ PARTITION_AXES = [
     ("licYn", LIC_CODES),
 ]
 
+# ── 정렬 뒤집기 (`sort` + `order`) — 500 상한 우회의 **가장 값싼 수단** ────────────
+# ✅ 실측(2026-08-12 재검증). ⚠️ 초판은 "sort 미지원"으로 적었으나 틀렸다 —
+#    후보값을 `title_asc`·`pubyear_desc` 처럼 지어내 시험했고, 실제 값은 **색인 필드명**이다.
+#    동작: 아래 5종 / 무시: `ikdc`·`icall_no`·`pub_year`·`title`·`regdate`(i 없는 이름).
+#
+# **`asc` 와 `desc` 의 교집합이 0건**이므로 한 정렬축이 상한을 사실상 2배로 늘린다.
+# 실측(`교육복지`/`도서` 1,856건): 무정렬 500 → +ipub_year 1,247 → +ititle 1,558
+#                                → +iauthor **1,746(94%)**, 단 **7요청**.
+# 비교: 자료구분 재귀 분할 깊이3 은 7,028건 질의에 60요청으로 67%. 이쪽이 훨씬 싸다.
+SORT_FIELDS = ["ipub_year", "ititle", "iauthor", "ipublisher", "iregdate"]
+
 # `srchTarget` — ✅ 실측으로 **동작이 확인된 값**(2026-08-12)
 #   kwd=오욱환: author=36 · title=13 · publisher=0   ← 셋이 서로 달라 각각 해석됨이 확정
 #   kwd=교육과학사: publisher=5,973 · author=22 · total=6,095
