@@ -1,36 +1,78 @@
-"""Smoke test script for National Library Seoji OpenAPI FastMCP server."""
+"""MCP stdio 프로토콜 스모크 — 실제 서버 프로세스를 띄워 핸드셰이크·도구목록을 검증.
 
-import asyncio
+pytest 는 함수를 직접 호출할 뿐 **프로토콜 경로를 타지 않는다.** 클라이언트가 실제로
+띄울 수 있는지는 이 스크립트(와 CI 의 콜드 스타트 단계)로만 확인된다.
+
+사용:  uv run python scripts/mcp_smoke.py
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
 import sys
-from nl_mcp.server import mcp, nl_search, nl_status
+
+EXPECTED_TOOLS = {"nl_status", "nl_search", "nl_collect"}
+
+REQUESTS = [
+    {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+     "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                "clientInfo": {"name": "smoke", "version": "1"}}},
+    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+]
 
 
-def run_smoke():
-    print("=== nl-openapi-mcp Smoke Test ===")
-    try:
-        tools = asyncio.run(mcp.list_tools())
-    except Exception:
-        tools = mcp.list_tools()
-    print(f"등록된 MCP 도구 개수: {len(tools)}개")
-    for t in tools:
-        print(f"  - [{t.name}]: {t.description[:50]}...")
+def main() -> int:
+    payload = "\n".join(json.dumps(r) for r in REQUESTS) + "\n"
+    # ⚠️ Windows 는 기본 로케일이 cp949 라 UTF-8 인 도구 설명(한글)에서 디코딩이 깨진다.
+    #    부모·자식 양쪽에서 UTF-8 을 명시해야 한다.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "nl_mcp.server"],
+        input=payload, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env, timeout=60,
+    )
 
-    print("\n1) nl_status() 실행...")
-    st = nl_status()
-    print("  -> 결과:", st)
+    responses = {}
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "id" in msg:
+            responses[msg["id"]] = msg
 
-    if not st.get("api_key_configured"):
-        print("\n [주의] NL_API_KEY가 미설정되어 라이브 검색 테스트는 건너뜁니다.")
-        return
+    if 1 not in responses or "result" not in responses[1]:
+        print("initialize 실패", file=sys.stderr)
+        print(proc.stderr[-2000:], file=sys.stderr)
+        return 1
+    print(f"initialize OK — serverInfo={responses[1]['result']['serverInfo']}")
 
-    print("\n2) nl_search(kwd='도서관', page_size=1) 라이브 검색 실행...")
-    res = nl_search(kwd="도서관", page_size=1)
-    print("  -> 성공 여부:", res.get("success"))
-    print("  -> 전체 건수:", res.get("total"))
-    print("  -> 반환 레코드 수:", res.get("count"))
+    if 2 not in responses:
+        print("tools/list 응답 없음", file=sys.stderr)
+        return 1
+    tools = {t["name"]: t for t in responses[2]["result"]["tools"]}
+    print(f"tools/list OK — {len(tools)}종: {', '.join(sorted(tools))}")
 
-    print("\n=== Smoke Test 모두 성공 ===")
+    missing = EXPECTED_TOOLS - set(tools)
+    if missing:
+        print(f"누락된 도구: {sorted(missing)}", file=sys.stderr)
+        return 1
+
+    for name, t in sorted(tools.items()):
+        ann = t.get("annotations") or {}
+        if not ann.get("openWorldHint"):
+            print(f"{name}: openWorldHint 미선언", file=sys.stderr)
+            return 1
+        print(f"  {name:12} annotations={ann}")
+
+    print("\n스모크 통과.")
+    return 0
 
 
 if __name__ == "__main__":
-    run_smoke()
+    raise SystemExit(main())

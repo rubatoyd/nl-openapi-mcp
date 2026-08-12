@@ -3,7 +3,7 @@
   "name": "nl-openapi-mcp",
   "display_name": "국립중앙도서관 소장자료 검색기 (nl-openapi-mcp)",
   "version": "0.2.0",
-  "description": "국립중앙도서관 소장자료 검색 OpenAPI 수집기 — 단행본·온라인자료 서지, KDC 분류, 청구기호, 원문 제공 여부. 500건 상한 절단을 명시적으로 보고합니다. xlsx/csv/json/sqlite 내보내기",
+  "description": "국립중앙도서관 소장자료 검색 OpenAPI 수집기 — 자체완결 바이너리(Python·uv 불필요). 500건 상한 절단을 명시적으로 보고합니다.",
   "author": { "name": "Yeondong Yang", "url": "https://github.com/rubatoyd/nl-openapi-mcp" },
   "homepage": "https://github.com/rubatoyd/nl-openapi-mcp",
   "documentation": "https://github.com/rubatoyd/nl-openapi-mcp#readme",
@@ -11,13 +11,18 @@
   "keywords": ["nl", "national-library", "korea", "openapi", "library", "holdings", "metadata", "kdc"],
   "server": {
     "type": "binary",
-    "entry_point": "uvx",
+    "entry_point": "server/nl-mcp",
     "mcp_config": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/rubatoyd/nl-openapi-mcp", "nl-mcp"],
+      "command": "${__dirname}/server/nl-mcp",
+      "args": [],
       "env": {
         "NL_API_KEY": "${user_config.api_key}",
         "NL_OS_TRUST": "${user_config.os_trust}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/nl-mcp.exe"
+        }
       }
     }
   },
@@ -44,7 +49,7 @@
     { "name": "nl_collect", "description": "다중 검색어 합집합 수집 → xlsx/csv/json/sqlite 저장. 상한에 걸린 검색어를 지목" }
   ],
   "compatibility": {
-    "platforms": ["win32", "darwin", "linux"],
-    "runtimes": { "python": ">=3.10" }
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["win32", "darwin", "linux"]
   }
 }

@@ -1,171 +1,135 @@
-"""Command Line Interface for National Library of Korea Seoji OpenAPI tool."""
+"""국립중앙도서관 소장자료 검색 CLI — status / search / collect."""
+from __future__ import annotations
 
 import argparse
 import json
 import sys
-from typing import Any, Dict, List
+from pathlib import Path
 
-from .client import NlSeojiClient
-from .config import get_api_key
-from .exporters import export_records
-from .models import SeojiRecord
+from .client import NlClient, NlError
+from .config import API_RECORD_CAP, get_api_key, redact
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    """Handle 'status' subcommand."""
-    api_key = get_api_key()
-    if not api_key:
-        print("NL_API_KEY 상태: 미설정 (.env 파일 또는 환경변수를 확인하세요)", file=sys.stderr)
-        return 1
+def _err(msg: str) -> int:
+    print(msg, file=sys.stderr)
+    return 1
 
-    client = NlSeojiClient(api_key=api_key)
+
+def cmd_status(args) -> int:
+    key = get_api_key()
+    print(f"NL_API_KEY: {'설정됨 ' + redact(key) if key else '미설정'}")
+    if not key:
+        return _err("인증키가 없습니다 — .env 또는 환경변수 NL_API_KEY 를 설정하세요.")
     try:
-        res = client.search(kwd="도서관", page_num=1, page_size=1)
-        print("국립중앙도서관 국가서지 OpenAPI 상태: 정상 (OK)")
-        print(f"샘플 키워드('도서관') 총 검색 결과 수: {res.total:,}건")
-        return 0
-    except Exception as e:
-        print(f"OpenAPI 상태 확인 중 오류 발생: {str(e)}", file=sys.stderr)
-        return 1
+        total, recs, _ = NlClient().search_page("도서관", page_num=1, page_size=1)
+    except NlError as e:
+        return _err(f"연결 실패: {e}")
+    print("소장자료 검색 API: 정상")
+    print(f"  시범 검색('도서관') total = {total:,}건 / 반환 {len(recs)}건")
+    print(f"  ※ 이 API 는 한 검색식당 {API_RECORD_CAP}건이 상한입니다(오류코드 012).")
+    return 0
 
 
-def cmd_search(args: argparse.Namespace) -> int:
-    """Handle 'search' subcommand."""
-    client = NlSeojiClient()
+def cmd_search(args) -> int:
+    if not get_api_key():
+        return _err("NL_API_KEY 미설정.")
     try:
-        res = client.search(
-            kwd=args.kwd,
-            title=args.title,
-            author=args.author,
-            publisher=args.publisher,
-            keyword=args.keyword,
-            isbn=args.isbn,
-            seoji_year=args.seoji_year,
-            sort=args.sort,
-            page_num=args.page,
-            page_size=args.rows,
-        )
-    except Exception as e:
-        print(f"검색 오류: {str(e)}", file=sys.stderr)
-        return 1
-
+        total, recs, _ = NlClient().search_page(
+            args.kwd, srch_target=args.target, category=args.category,
+            page_num=args.page, page_size=args.rows)
+    except NlError as e:
+        return _err(f"검색 오류: {e}")
     if args.json:
-        print(json.dumps(res.to_dict(), ensure_ascii=False, indent=2))
+        print(json.dumps({"total": total, "count": len(recs),
+                          "records": [r.to_row() for r in recs]},
+                         ensure_ascii=False, indent=2))
         return 0
-
-    print(f"총 {res.total:,}건 중 {len(res.records)}건 출력 (Page {res.page_num}):\n")
-    for i, r in enumerate(res.records, start=1):
-        author_str = f" / {r.author}" if r.author else ""
-        pub_str = f" [{r.publisher}, {r.pub_year}]" if (r.publisher or r.pub_year) else ""
-        print(f"[{i}] {r.title}{author_str}{pub_str}")
-        if r.isbn:
-            print(f"    ISBN: {r.isbn}")
-        if r.detail_url:
-            print(f"    URL: {r.detail_url}")
+    print(f"총 {total:,}건 중 {len(recs)}건 (page {args.page})")
+    if total > API_RECORD_CAP:
+        print(f"⚠️ total 이 API 상한 {API_RECORD_CAP}건을 넘습니다 — 전건 수집 불가. "
+              f"검색식을 쪼개세요.\n")
+    for i, r in enumerate(recs, 1):
+        print(f"[{i}] {r.title}")
+        if r.authors:
+            print(f"    저자: {r.authors}")
+        print(f"    발행: {r.pub_info}  ({r.pub_year or '연도미상'})")
+        meta = [x for x in (r.isbn and f"ISBN {r.isbn}", r.call_no and f"청구 {r.call_no}",
+                            r.kdc_name, r.place_info) if x]
+        if meta:
+            print(f"    {' | '.join(meta)}")
+        if r.has_fulltext():
+            print(f"    원문: {r.doc_type}  {r.lic_text}")
         print()
     return 0
 
 
-def cmd_collect(args: argparse.Namespace) -> int:
-    """Handle 'collect' subcommand."""
-    client = NlSeojiClient()
+def cmd_collect(args) -> int:
+    if not get_api_key():
+        return _err("NL_API_KEY 미설정.")
+    terms = args.terms or ([args.kwd] if args.kwd else [])
+    if not terms:
+        return _err("검색어가 없습니다 — --kwd 또는 --terms 를 주세요.")
     try:
-        records = client.collect(
-            kwd=args.kwd,
-            title=args.title,
-            author=args.author,
-            publisher=args.publisher,
-            keyword=args.keyword,
-            isbn=args.isbn,
-            seoji_year=args.seoji_year,
-            sort=args.sort,
-            max_records=args.max_records,
-        )
-    except Exception as e:
-        print(f"수집 오류: {str(e)}", file=sys.stderr)
-        return 1
+        recs, meta = NlClient().search_terms_meta(
+            terms, srch_target=args.target, category=args.category,
+            year_from=args.year_from, year_to=args.year_to,
+            contains=args.contains, max_records=args.max)
+    except NlError as e:
+        return _err(f"수집 오류: {e}")
 
-    if not records:
-        print("수집된 서지 데이터가 없습니다.", file=sys.stderr)
-        return 1
+    print(f"수집 {len(recs)}건 (검색어 {len(terms)}개 합집합)")
+    for a in meta["axes"]:
+        flag = "  ⚠️상한" if a["cap_hit"] else ""
+        print(f"  - {a['term']}: total {a['total']:,} / 회수 {a['fetched']:,} / 신규 {a['new']:,}{flag}")
+    if meta.get("warning"):
+        print(f"\n{meta['warning']}\n")
 
-    output_path = args.output
-    saved = export_records(records, output_path=output_path, fmt=args.format)
-    print(f"총 {len(records)}건의 서지 정보를 '{saved}' 파일에 내보냈습니다.")
-    return 0
-
-
-def cmd_server(args: argparse.Namespace) -> int:
-    """Handle 'server' subcommand to run STDIO MCP server."""
-    from .server import mcp
-    mcp.run()
+    from .exporters import export
+    fmts = args.format or ["xlsx", "csv", "json"]
+    base = args.out or str(Path.home() / "nl-output")
+    name = (args.name or f"nl_{terms[0]}").replace(" ", "_")[:60]
+    for p in export(recs, fmts, base, name):
+        print(f"  저장: {p}")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build argument parser for CLI."""
-    parser = argparse.ArgumentParser(
-        prog="nl-mcp",
-        description="National Library of Korea Seoji OpenAPI MCP Tool & CLI",
-    )
-    subparsers = parser.add_subparsers(dest="subcommand", help="사용 가능한 명령어")
+    p = argparse.ArgumentParser(
+        prog="nl-mcp", description="국립중앙도서관 소장자료 검색 수집기")
+    sub = p.add_subparsers(dest="cmd", required=True)
 
-    # status
-    subparsers.add_parser("status", help="OpenAPI 키 설정 및 서버 통신 상태 확인")
+    sub.add_parser("status", help="인증키·연결 점검").set_defaults(func=cmd_status)
 
-    # search
-    p_search = subparsers.add_parser("search", help="서지사항 일반/상세 검색")
-    p_search.add_argument("--kwd", default="", help="일반 검색 키워드")
-    p_search.add_argument("--title", default="", help="표제 검색")
-    p_search.add_argument("--author", default="", help="저자 검색")
-    p_search.add_argument("--publisher", default="", help="발행처 검색")
-    p_search.add_argument("--keyword", default="", help="주제 키워드 검색")
-    p_search.add_argument("--isbn", default="", help="ISBN/ISSN 검색")
-    p_search.add_argument("--seoji-year", default="", help="수록연도 필터")
-    p_search.add_argument("--sort", default="", help="정렬 옵션 (예: title_asc, pubyear_desc)")
-    p_search.add_argument("--page", type=int, default=1, help="페이지 번호 (기본: 1)")
-    p_search.add_argument("--rows", type=int, default=10, help="페이지당 출력 수 (기본: 10)")
-    p_search.add_argument("--json", action="store_true", help="JSON 포맷으로 출력")
+    s = sub.add_parser("search", help="소장자료 검색")
+    s.add_argument("kwd", help="검색어")
+    s.add_argument("--target", default="title", help="검색 대상 필드 (기본 title)")
+    s.add_argument("--category", default=None, help="자료 유형 필터 (예: 도서)")
+    s.add_argument("--rows", type=int, default=20, help="반환 건수 (최대 100)")
+    s.add_argument("--page", type=int, default=1, help="페이지 번호")
+    s.add_argument("--json", action="store_true", help="JSON 출력")
+    s.set_defaults(func=cmd_search)
 
-    # collect
-    p_collect = subparsers.add_parser("collect", help="다중 페이지 대량 수집 및 파일 저장")
-    p_collect.add_argument("--kwd", default="", help="일반 검색 키워드")
-    p_collect.add_argument("--title", default="", help="표제 검색")
-    p_collect.add_argument("--author", default="", help="저자 검색")
-    p_collect.add_argument("--publisher", default="", help="발행처 검색")
-    p_collect.add_argument("--keyword", default="", help="주제 키워드 검색")
-    p_collect.add_argument("--isbn", default="", help="ISBN/ISSN 검색")
-    p_collect.add_argument("--seoji-year", default="", help="수록연도 필터")
-    p_collect.add_argument("--sort", default="", help="정렬 옵션")
-    p_collect.add_argument("--max-records", type=int, default=50, help="최대 수집 건수 (기본: 50)")
-    p_collect.add_argument("--format", default="", choices=["xlsx", "csv", "json", "sqlite", ""], help="출력 파일 형식")
-    p_collect.add_argument("-o", "--output", required=True, help="저장할 로컬 파일 경로")
-
-    # server
-    subparsers.add_parser("server", help="MCP 프로토콜 STDIO 서버 실행")
-
-    return parser
+    c = sub.add_parser("collect", help="다중 검색어 합집합 수집 → 파일 저장")
+    c.add_argument("--kwd", default=None, help="단일 검색어")
+    c.add_argument("--terms", nargs="+", default=None, help="변형어 목록 (합집합)")
+    c.add_argument("--target", default="title", help="검색 대상 필드 (기본 title)")
+    c.add_argument("--category", default=None, help="자료 유형 필터 (예: 도서)")
+    c.add_argument("--year-from", type=int, default=None, dest="year_from")
+    c.add_argument("--year-to", type=int, default=None, dest="year_to")
+    c.add_argument("--contains", nargs="+", default=None, help="결과 부분일치 후처리 필터")
+    c.add_argument("--max", type=int, default=500, help="최대 수집 건수")
+    c.add_argument("--format", nargs="+", default=None,
+                   help="출력 형식 (xlsx csv json sqlite)")
+    c.add_argument("--out", default=None, help="출력 디렉터리")
+    c.add_argument("--name", default=None, help="출력 파일명(확장자 제외)")
+    c.set_defaults(func=cmd_collect)
+    return p
 
 
-def main(argv: List[str] | None = None) -> int:
-    """CLI entry point."""
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    if not args.subcommand:
-        parser.print_help()
-        return 0
-
-    if args.subcommand == "status":
-        return cmd_status(args)
-    elif args.subcommand == "search":
-        return cmd_search(args)
-    elif args.subcommand == "collect":
-        return cmd_collect(args)
-    elif args.subcommand == "server":
-        return cmd_server(args)
-    return 0
+def main() -> None:
+    args = build_parser().parse_args()
+    raise SystemExit(args.func(args))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

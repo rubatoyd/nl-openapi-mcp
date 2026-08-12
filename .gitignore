@@ -1,50 +1,30 @@
-# Python
+# 자격증명
+.env
+.env.*
+!.env.example
+
+# Claude Code 로컬 설정 (NL_API_KEY 등 비밀 포함 가능)
+.claude/settings.local.json
+
+# 수집 산출물
+output/
+nl-output/
+
+# Python / uv
+.venv/
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Test / coverage
+dist/
+build/
 .pytest_cache/
 .coverage
 htmlcov/
-*.cover
-*.py,cover
-.hypothesis/
 
-# Exported files
-*.xlsx
-*.csv
-*.sqlite
-*.db
+# 빌드 산출물
+*.mcpb
+bundle/
 
-# OS
+# OS / 에디터
 .DS_Store
 Thumbs.db

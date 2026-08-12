@@ -1,51 +1,106 @@
 # nl-openapi-mcp 아키텍처 및 설계 의도
 
-> 국립중앙도서관 국가서지 OpenAPI(`seojiSearch.do`)를 활용하여 학술 문헌·도서 서지정보를
-> 검색하고 대량 수집할 수 있도록 설계된 공통 코어(REST + MCP + CLI) 아키텍처.
-> 자매 프로젝트 `kci-openapi-mcp`, `scienceon-mcp`와 아키텍처 호환성을 유지한다.
+> 국립중앙도서관 **소장자료 검색** OpenAPI(`www.nl.go.kr/NL/search/openApi/search.do`)를
+> 검색·대량수집하는 공통 코어(REST + MCP + CLI) 아키텍처.
+> 자매 프로젝트 `kci-openapi-mcp`·`scienceON-mcp` 와 레이어 구성을 맞춘다.
 
 ---
 
 ## 1. 레이어 구조
 
 ```
-server.py / cli.py              ← MCP 도구 · CLI 표면
+server.py / cli.py         ← MCP 도구 · CLI 표면 (@_safe · annotations)
         │
-     client.py                  ← 국립중앙도서관 OpenAPI HTTP 클라이언트 (NL_API_KEY 인증, 페이징)
+     client.py             ← HTTP · 페이징 · 재시도 · **절단 메타 산출**
         │
-    parser.py                   ← JSON/XML 파서 + HTML 태그('<span class="highlight">') 자동 정제
+     parser.py             ← JSON 봉투 파싱 · HTML 하이라이트 제거 · 오류 → ParseError
         │
-    models.py                   ← 통합 SeojiRecord / SearchResult 스키마
+     models.py             ← Holding 스키마(실응답 24개 필드) · 발행연도 정규화 · 중복제거 키
         │
-   exporters.py                 ← xlsx / csv / json / sqlite 내보내기 도구
+   exporters.py            ← xlsx / csv / json / sqlite
 ```
 
-- **공통 코어 공유**: CLI(`nl-mcp`)와 MCP 서버(`server.py`)는 모두 `client.py`, `parser.py`, `models.py`, `exporters.py`를 공통으로 호출한다.
-- **안전한 예외 차단 (`@_safe`)**: MCP 도구 계층에서 모든 HTTP 통신 오류나 파싱 오류를 캡처하여 프로토콜이 종료되지 않고 알림(`{"error": "..."}`) 형태로 반환한다.
-- **가상환경 외부화**: 클라우드 동기화 폴더(`OneDrive`)에서 파일 잠금을 막기 위해 `UV_PROJECT_ENVIRONMENT` 환경변수로 외부 `~/.venvs/nl-openapi-mcp` 경로를 관리한다.
+`config.py` 는 모든 층이 참조한다(엔드포인트 · `API_RECORD_CAP` · 자격증명 · `use_os_trust`).
 
 ---
 
-## 2. 통합 레코드 스키마 (`SeojiRecord`)
+## 2. 설계 결정과 그 이유
+
+### 2-1. 절단은 **데이터가 아니라 메타로** 전달한다
+`client.search_meta()` 는 `(records, meta)` 튜플을 돌려주고, `search()` 는 그 위의 얇은 래퍼다.
+레코드만 반환하는 API 를 기본으로 두면 호출자가 `total` 을 볼 방법이 없어지고,
+그 순간 **부분 집합을 전수로 오인**하는 사고가 난다(자매 프로젝트 2곳에서 실제로 발생).
+
+`cap_hit` 과 `truncated` 를 **분리한 것이 핵심**이다. 처방이 다르기 때문이다:
+- `truncated` → `max_records` 를 올리면 대개 해결
+- `cap_hit` → API 가 500건까지만 준다. **올려도 해결 안 됨** → 검색식 분할 필요
+
+### 2-2. 필터의 위치를 분명히 한다
+`year_from`/`contains` 는 **로컬 후처리**다. 서버측 필터가 아니므로 500건 상한을 풀어주지 않는다.
+이 성질은 회귀 테스트로 고정돼 있다 — 나중에 "연도를 걸면 되지 않나?" 로 되돌아가지 않도록.
+
+### 2-3. 원본을 버리지 않는다
+`Holding.raw` 에 24개 필드를 통째로 보존한다. 정규화는 손실 변환이고, 이 API 는
+`orgLink` 에 URL 대신 안내문이 오는 등 **예외가 잦다**. json 내보내기도 `raw` 를 함께 싣는다.
+
+### 2-4. 실패는 시끄럽게
+- `server.py` 는 `mcp.server.fastmcp` 를 **조건부 import 하지 않는다** — 폴백을 두면
+  의존성 상한 누락이 감춰지고 반쯤 동작하는 서버가 뜬다(v0.1.0 의 실제 결함).
+- `parser` 는 `result` 키 부재를 **오류로 본다** — 빈 목록 통과는 인증키 오류를 '0건'으로 둔갑시킨다.
+- 반대로 **MCP 도구 경계에서는 조용하게**: `@_safe` 가 모든 예외를 dict 로 바꾼다.
+  프로토콜 밖으로 예외가 새면 클라이언트가 깨진다.
+
+### 2-5. 인증키는 예외 메시지에도 남기지 않는다
+`raise_for_status()` 를 쓰지 않는다 — requests 가 **키가 든 전체 URL 을 메시지에 박기** 때문이다
+(v0.1.0 의 실제 누출 경로). 상태코드만 보고한다.
+
+### 2-6. TLS 는 코드에서 처리한다
+`config.use_os_trust()` 를 `NlClient.__init__` 에서 호출한다. MCP 등록 명령줄에 두면
+`.mcpb` 번들·PyInstaller 바이너리 경로에 적용되지 않아 교육망에서 실패한다
+(scienceon 이 이 함정에 빠졌다). 검증을 끄지 않고 OS 신뢰저장소를 쓴다.
+
+### 2-7. venv 는 클라우드 폴더 밖
+OneDrive 동기화 폴더 안의 venv 는 파손된다(실제로 자매 프로젝트 3곳 모두 `pyvenv.cfg` 의 home 이
+**존재하지 않는 사용자 프로필**을 가리키는 상태로 발견됐다).
+`UV_PROJECT_ENVIRONMENT` 로 외부 경로를 지정한다 — 환경변수 전용이라 pyproject 로는 지정 불가.
+
+---
+
+## 3. 통합 레코드 스키마 (`Holding`)
+
+실응답 24개 필드 → 정규화 25개 컬럼. 전체 표·결측률 → [NL_API_GUIDE.md §2](NL_API_GUIDE.md).
 
 ```python
-class SeojiRecord:
-    control_no: str       # 제어번호 / 분류 (예: "일반도서", "아동도서")
-    title: str            # 표제 (HTML 하이라이트 태그 제거)
-    author: str           # 저작자명
-    publisher: str        # 발행자
-    pub_year: str         # 발행년도
-    seoji_year: str       # 수록연도
-    isbn: str             # ISBN 또는 ISSN
-    doc_yn: str           # 원문 유무 (Y/N/기타)
-    page_info: str        # 형태사항 (예: "275 p. : 삽도 ; 29 cm")
-    detail_url: str       # 상세페이지 전체 URL
-    source: str = "seoji" # 출처 태그
-    raw: dict             # 원본 응답 보존
+class Holding:
+    record_id: str      # id — 전건 존재 → 중복제거 1차 키
+    control_no: str     # controlNo — 온라인자료엔 없음(31.0% 빈값)
+    title: str          # titleInfo (HTML 하이라이트 제거)
+    authors: str        # authorInfo — "역할: 이름" 을 ';' 로 연결한 원문
+    pub_info: str       # pubInfo — 발행지·발행처·발행년 결합 문자열
+    pub_year: str       # 4자리 정규화 (+ pub_year_raw 로 원문 보존)
+    type_code: str      # B1=인쇄자료 / D1=온라인자료
+    kdc_code / kdc_name / class_no / call_no
+    doc_type: str       # docYn — ⚠️ 불리언 아님(NL_VIEWER/LD_VIEWER/FILE/LINK/N)
+    lic_code / lic_text # licYn — ⚠️ 불리언 아님(L/F/S/D/N/Y)
+    detail_url / image_url / org_link
+    raw: dict           # 원본 24개 필드
 ```
+
+중복제거 키는 `id:` → `cn:` → `isbn:` → `tt:` 순으로 **키스페이스를 분리**한다
+(항상 `str` 을 반환해 우연한 충돌을 막는다).
 
 ---
 
-## 3. 페이징 및 대량 수집 (`kci_collect` 호환 `nl_collect`)
-- 국립중앙도서관 검색 API는 한 페이지당 `pageSize`(기본 10, 지정 가능)와 `pageNum` 파라미터를 갖는다.
-- `nl_collect` 도구 및 CLI는 사용자가 요청한 `max_records`에 맞춰 여러 페이지를 연속 호출하며 중복 건을 병합한 뒤 원하는 포맷(`xlsx`, `csv`, `json`, `sqlite`)으로 출력한다.
+## 4. 대량 수집 흐름
+
+```
+nl_collect(terms=[…])
+   → 검색어별 search_meta()            … 각각 최대 500건(API 상한)
+   → id 기준 합집합                     … axes[] 에 축별 total·fetched·new 기록
+   → 연도·contains 로컬 후처리          … 필터링 건수를 meta 에 집계
+   → exporters.export()                … xlsx/csv/json/sqlite
+   → meta.cap_hit_terms 로 상한 검색어 지목
+```
+
+검색식에 OR 연산자가 없으므로 **변형어별 개별검색 후 합집합**이 정석이다(KCI 에서 검증된 전략).
+이 구조는 500건 상한에 대한 대응이기도 하다 — 검색어를 쪼개면 조각마다 한도를 새로 받는다.

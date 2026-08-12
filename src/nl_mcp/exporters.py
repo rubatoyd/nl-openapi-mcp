@@ -1,111 +1,79 @@
-"""Export functions for saving harvested bibliographic records to local files."""
+"""수집 결과(Holding)를 xlsx/csv/json/sqlite 로 저장. (자매 프로젝트 kci/scienceon 과 동일 패턴)"""
+from __future__ import annotations
 
 import csv
 import json
 import sqlite3
-from typing import List
+from pathlib import Path
+from typing import Sequence
 
-import openpyxl
-
-from .models import SeojiRecord
-
-_FIELDS = [
-    "control_no",
-    "title",
-    "author",
-    "publisher",
-    "pub_year",
-    "seoji_year",
-    "category",
-    "isbn",
-    "doc_yn",
-    "page_info",
-    "detail_url",
-    "source",
-]
+from .models import COLUMNS, Holding
 
 
-def export_xlsx(records: List[SeojiRecord], output_path: str) -> str:
-    """Export records to Excel (.xlsx) file."""
-    wb = openpyxl.Workbook()
+def _rows(records: Sequence[Holding]) -> list[dict]:
+    return [r.to_row() for r in records]
+
+
+def to_json(records: Sequence[Holding], path: str) -> None:
+    """정규화 행 + 원본 24개 필드(raw)를 함께 저장 — 정규화가 버린 값 복구용."""
+    data = [{**r.to_row(), "raw": r.raw} for r in records]
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def to_csv(records: Sequence[Holding], path: str) -> None:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:  # 엑셀 한글 호환 BOM
+        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(_rows(records))
+
+
+def to_xlsx(records: Sequence[Holding], path: str) -> None:
+    from openpyxl import Workbook
+
+    wb = Workbook()
     ws = wb.active
-    ws.title = "SeojiRecords"
-
-    ws.append(_FIELDS)
-    for r in records:
-        d = r.to_dict()
-        ws.append([d.get(f, "") for f in _FIELDS])
-
-    wb.save(output_path)
-    return output_path
+    ws.title = "holdings"
+    ws.append(COLUMNS)
+    for row in _rows(records):
+        ws.append([row.get(c, "") for c in COLUMNS])
+    wb.save(path)
 
 
-def export_csv(records: List[SeojiRecord], output_path: str) -> str:
-    """Export records to UTF-8 CSV (.csv) file."""
-    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=_FIELDS, extrasaction="ignore")
-        writer.writeheader()
+def to_sqlite(records: Sequence[Holding], path: str, *, table: str = "holdings") -> None:
+    con = sqlite3.connect(path)
+    try:
+        cols = ", ".join(f'"{c}" TEXT' for c in COLUMNS)
+        con.execute(f"DROP TABLE IF EXISTS {table}")  # 스냅샷: 재실행 시 누적 방지
+        con.execute(f'CREATE TABLE {table} ({cols}, "raw" TEXT)')
+        ph = ", ".join(["?"] * (len(COLUMNS) + 1))
         for r in records:
-            writer.writerow(r.to_dict())
-    return output_path
+            row = r.to_row()
+            con.execute(
+                f'INSERT INTO {table} ({", ".join(COLUMNS)}, raw) VALUES ({ph})',
+                [row.get(c, "") for c in COLUMNS] + [json.dumps(r.raw, ensure_ascii=False)],
+            )
+        con.commit()
+    finally:
+        con.close()
 
 
-def export_json(records: List[SeojiRecord], output_path: str) -> str:
-    """Export records to JSON (.json) file."""
-    data = [r.to_dict() for r in records]
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return output_path
+_EXPORTERS = {"json": to_json, "csv": to_csv, "xlsx": to_xlsx, "sqlite": to_sqlite}
+_EXT = {"json": ".json", "csv": ".csv", "xlsx": ".xlsx", "sqlite": ".sqlite"}
 
 
-def export_sqlite(
-    records: List[SeojiRecord],
-    output_path: str,
-    table_name: str = "seoji_records",
-) -> str:
-    """Export records to SQLite database (.sqlite/.db) file."""
-    conn = sqlite3.connect(output_path)
-    cur = conn.cursor()
-
-    columns_def = ", ".join(f"{f} TEXT" for f in _FIELDS)
-    cur.execute(f"CREATE TABLE IF NOT EXISTS {table_name} ({columns_def})")
-
-    placeholders = ", ".join("?" for _ in _FIELDS)
-    insert_sql = f"INSERT INTO {table_name} ({', '.join(_FIELDS)}) VALUES ({placeholders})"
-
-    rows = []
-    for r in records:
-        d = r.to_dict()
-        rows.append(tuple(str(d.get(f, "")) for f in _FIELDS))
-
-    cur.executemany(insert_sql, rows)
-    conn.commit()
-    conn.close()
-    return output_path
-
-
-def export_records(
-    records: List[SeojiRecord],
-    output_path: str,
-    fmt: str = "",
-) -> str:
-    """Export records to output_path using specified format or file extension."""
-    if not fmt:
-        if output_path.endswith(".xlsx"):
-            fmt = "xlsx"
-        elif output_path.endswith(".csv"):
-            fmt = "csv"
-        elif output_path.endswith(".sqlite") or output_path.endswith(".db"):
-            fmt = "sqlite"
-        else:
-            fmt = "json"
-
-    fmt = fmt.lower().strip()
-    if fmt == "xlsx":
-        return export_xlsx(records, output_path)
-    elif fmt == "csv":
-        return export_csv(records, output_path)
-    elif fmt in ("sqlite", "db", "sqlite3"):
-        return export_sqlite(records, output_path)
-    else:
-        return export_json(records, output_path)
+def export(records: Sequence[Holding], formats: Sequence[str], out_dir: str,
+           name: str) -> list[str]:
+    """formats 각각으로 out_dir/name.* 저장. 저장된 경로 목록 반환."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    for fmt in formats:
+        key = str(fmt).lower().lstrip(".")
+        if key == "db":
+            key = "sqlite"
+        if key not in _EXPORTERS:
+            raise ValueError(f"지원하지 않는 출력형식: {fmt} (가능: {list(_EXPORTERS)})")
+        p = out / f"{name}{_EXT[key]}"
+        _EXPORTERS[key](records, str(p))
+        paths.append(str(p))
+    return paths

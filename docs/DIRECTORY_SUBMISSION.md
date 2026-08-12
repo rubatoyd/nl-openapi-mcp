@@ -7,29 +7,40 @@
 
 ## 1. Basic information
 - **Extension name (id):** `nl-openapi-mcp`
-- **Display name:** National Library of Korea Seoji OpenAPI (국립중앙도서관 국가서지 검색)
-- **Version:** 0.1.0
+- **Display name:** National Library of Korea — Holdings Search (국립중앙도서관 소장자료 검색)
+- **Version:** 0.2.0
 - **Category:** Research / Academic & Reference / Books
-- **Author / Publisher:** Yeondong Yang (GitHub: rubato103)
+- **Author / Publisher:** Yeondong Yang (GitHub: rubatoyd)
 - **Contact email:** rubato103@gmail.com
-- **Repository:** https://github.com/rubato103/nl-openapi-mcp
-- **Homepage / Docs:** https://github.com/rubato103/nl-openapi-mcp#readme
+- **Repository:** https://github.com/rubatoyd/nl-openapi-mcp
+- **Homepage / Docs:** https://github.com/rubatoyd/nl-openapi-mcp#readme
 - **License:** MIT
-- **MCP Registry name:** `io.github.rubato103/nl-openapi-mcp`
-- **PyPI Package:** `nl-openapi-mcp`
+- **MCP Registry name:** `io.github.rubatoyd/nl-openapi-mcp`
 
 ## 2. Short description
-> Search and collect Korean academic bibliography, books, and literature metadata from the National Library of Korea Seoji OpenAPI.
+> Search and harvest holdings of the National Library of Korea — books and online materials, with KDC classification, call numbers, and full-text availability.
 
 ## 3. Long description
-> nl-openapi-mcp connects Claude to the **National Library of Korea Seoji OpenAPI**, the official national bibliographic database of South Korea. It allows users to search Korean academic publications, books, and literature, retrieve normalized bibliographic records (including titles, authors, publishers, publication years, ISBNs, and physical descriptions), and bulk-harvest metadata across multiple pages.
+> nl-openapi-mcp connects Claude to the **holdings search API of the National Library of Korea**, the national deposit library of South Korea. Users can search the library's catalogue of books and online materials and retrieve normalized records covering title, statement of responsibility, imprint, publication year, ISBN, call number, KDC classification, shelf location, and how (or whether) full text is available.
 >
-> All search and detail responses are automatically stripped of HTML highlight tags and standardized into clean structured models. The tool also provides built-in exporters to save harvested datasets into local `xlsx`, `csv`, `json`, or `sqlite` files for academic research and bibliometric analysis.
+> The server is explicit about a hard constraint of this API: **a single search expression returns at most 500 records**, even when the reported total is far larger. Every response carries `total`, `truncated`, and `cap_hit` so that a partial result is never mistaken for a complete one, and the tool descriptions explain that the limit cannot be paged around — the query must be partitioned instead. Harvested datasets can be exported to `xlsx`, `csv`, `json`, or `sqlite` for bibliometric work.
+>
+> Responses are stripped of HTML highlight markup and normalized, while the original API fields are preserved alongside each record.
 
-## 4. Tools (4 Tools)
+## 4. Tools (3 tools)
 | Tool | What it does | Read-only | Auth | Data accessed / sent |
 |---|---|:--:|:--:|---|
-| `nl_status` | Check OpenAPI connectivity and verify whether `NL_API_KEY` is configured | ✅ | none | National Library endpoint |
-| `nl_search` | Search Korean bibliography records by keyword, title, author, publisher, keyword, or ISBN | ✅ | API key | National Library API endpoint; query parameters sent to server |
-| `nl_detail` | Get full bibliographic details for a specific record by title/control number | ✅ | API key | National Library API endpoint |
-| `nl_collect` | Multi-page search harvesting and export to local file (`xlsx`/`csv`/`json`/`sqlite`) | ✍️ writes files | API key | National Library API endpoint; writes dataset to local disk |
+| `nl_status` | Verify the API key and perform one live round-trip to the holdings search endpoint | ✅ | API key | National Library endpoint |
+| `nl_search` | Search holdings by keyword; returns `total`, `truncated`, and `cap_hit` alongside records | ✅ | API key | National Library endpoint; query parameters sent to server |
+| `nl_collect` | Harvest the union of several search terms and export to a local file (`xlsx`/`csv`/`json`/`sqlite`) | ✍️ writes files | API key | National Library endpoint; writes dataset to local disk |
+
+## 5. Safety & privacy
+- **No exception ever escapes the MCP boundary.** Every tool is wrapped so it returns a structured `dict` even on missing credentials, network failure, TLS errors, or malformed responses.
+- **The API key never appears in error messages.** `raise_for_status()` is deliberately avoided because it embeds the full request URL — including the key — in the exception text. Only status codes are reported.
+- **Credentials are supplied by the user** through the `NL_API_KEY` environment variable (or Claude Desktop user config). Nothing is bundled or hard-coded.
+- **Writes are local and non-destructive**: `nl_collect` creates files in a user-specified directory (default `~/nl-output/`) and never deletes existing data.
+- **TLS verification is never disabled.** On networks that intercept SSL (common in Korean schools and enterprises) the server uses the OS trust store via `truststore`; this can be turned off with `NL_OS_TRUST=0`.
+
+## 6. Known limitations (disclosed)
+- The upstream API caps any single search expression at **500 records**; larger result sets require partitioning the query. This is surfaced in every response rather than hidden.
+- Only the holdings search endpoint is covered. The National Library's separate bibliography (SEOJI) and Data4Library services are out of scope.

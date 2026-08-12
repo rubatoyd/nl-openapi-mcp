@@ -1,3 +1,3 @@
-"""National Library of Korea Seoji OpenAPI MCP Server & CLI."""
+"""국립중앙도서관 소장자료 검색 OpenAPI — MCP 서버 & CLI."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

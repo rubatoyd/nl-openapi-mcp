@@ -1,10 +1,12 @@
 {
   "mcpServers": {
     "nl": {
+      "type": "stdio",
       "command": "uvx",
-      "args": ["--from", ".", "nl-mcp"],
+      "args": ["--from", "git+https://github.com/rubatoyd/nl-openapi-mcp", "nl-mcp"],
       "env": {
-        "NL_API_KEY": "${NL_API_KEY}"
+        "NL_API_KEY": "${NL_API_KEY:-}",
+        "NL_OS_TRUST": "${NL_OS_TRUST:-1}"
       }
     }
   }
