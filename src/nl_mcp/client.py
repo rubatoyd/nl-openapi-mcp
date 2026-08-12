@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 
 import requests
@@ -314,6 +315,152 @@ class NlClient:
             )
         return out, meta
 
+    # ── f-슬롯 AND/NOT 재귀 이분할 — 누락 없는 정확한 분할 ────────────────────
+    def search_bisect_meta(self, kwd: str, *, srch_target: str = "title",
+                           max_depth: int = 4, max_records: int = API_RECORD_CAP * 12,
+                           page_size: int = MAX_PAGE_SIZE, sort_depth: int = 0,
+                           **extra) -> tuple[list[Holding], dict]:
+        """`detailSearch` f-슬롯의 AND/NOT 로 검색식을 **재귀 이분할**한다.
+
+        ✅ 실측 근거(2026-08-12): `AND + NOT = 부모` 가 모든 깊이에서 **정확히** 성립한다.
+           `교육복지`(1,856) → AND 학교 163 + NOT 학교 1,693 = 1,856
+           → 4분할 20+143+188+1505 = **1,856** · 깊이 3 도 150+1355 = 1505.
+           슬롯은 **좌결합·순차 적용**이고 3개 이상도 동작한다.
+
+        다른 축과 다른 점: `category`·`manageName` 은 값 집합이 고정돼 더 못 쪼개고,
+        `licYn` 은 빈 값을 못 잡아 샌다. **이분할은 임의 깊이로 쪼갤 수 있고 누락이 없다.**
+
+        🔴 **그러나 실측상 `auto_partition`+`sort_depth` 보다 열등하다 — 기본으로 쓰지 말 것.**
+           `교육`/`도서`(197,651건) 비교:
+             정렬만 sort5        5,321건 / 11요청
+             **분할3 + 정렬1    17,893건 / 60요청**  ← 가장 좋다
+             이분할8 + 정렬1    11,633건 / 135요청  ← 회수는 적고 요청은 2배
+           분할어 후보의 실제 크기를 재느라 요청을 쓰는데, 대형 코퍼스에서는 제목 토큰이
+           고르게 갈리지 않아 그 비용을 회수하지 못한다.
+
+        쓸 자리: **다른 축을 모두 소진했을 때**(category·manageName·licYn 를 전부 고정한
+        조각이 여전히 500을 넘을 때). 그 상황에서는 남은 유일한 정확 분할 축이다.
+
+        분할어는 받은 레코드 제목에서 후보를 뽑되, **실제 AND 건수를 1건짜리 요청으로 미리 재서**
+        절반에 가까운 것을 고른다(표본 빈도만 보면 쏠린 분할이 나와 68%에서 정체했다).
+        """
+        out: list[Holding] = []
+        seen: set[str] = set()
+        nodes: list[dict] = []
+        requests = 0
+        root_total = 0
+
+        def fetch(chain):
+            """조건 사슬로 한 조각을 받는다. chain = [(op, term), …]"""
+            nonlocal requests
+            p = {"detailSearch": "true", f"f1": srch_target, "v1": kwd}
+            for i, (op, term) in enumerate(chain, start=1):
+                p[f"and{i}"] = op
+                p[f"f{i + 1}"] = srch_target
+                p[f"v{i + 1}"] = term
+            budget = max_records - len(out)
+            if sort_depth > 0:
+                recs, m = self.search_sweep_meta(
+                    "", sort_depth=sort_depth, max_records=budget,
+                    page_size=page_size, **p, **extra)
+            else:
+                recs, m = self.search_meta(
+                    "", max_records=min(API_RECORD_CAP, budget),
+                    page_size=page_size, **p, **extra)
+            requests += m["requests"]
+            return recs, m
+
+        def take(recs):
+            new = 0
+            for h in recs:
+                k = h.dedup_key()
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(h)
+                new += 1
+            return new
+
+        def probe_total(chain) -> int | None:
+            """조건 사슬의 total 만 **1건짜리 요청**으로 싸게 잰다(분할어 고르기용)."""
+            nonlocal requests
+            p = {"detailSearch": "true", "f1": srch_target, "v1": kwd}
+            for i, (op, term) in enumerate(chain, start=1):
+                p[f"and{i}"] = op
+                p[f"f{i + 1}"] = srch_target
+                p[f"v{i + 1}"] = term
+            requests += 1
+            try:
+                total, _recs, _ = self.search_page("", page_num=1, page_size=1, **p, **extra)
+                return total
+            except NlError:
+                return None
+            finally:
+                time.sleep(self.throttle)
+
+        def pick_split(chain, recs, parent_total):
+            """분할어를 고른다 — 후보들의 **실제 AND 건수를 미리 재서** 절반에 가까운 것.
+
+            ⚠️ 표본(상한에 걸린 상위 500건)의 단어 빈도만 보고 고르면 쏠린 분할이 나온다.
+               실측에서 그렇게 했더니 68% 에서 정체했다(`연구` 같은 저빈도어가 뽑힘).
+               1건짜리 요청은 싸므로 몇 개 재보고 균형 잡힌 것을 쓰는 편이 결국 이득이다.
+            """
+            used = {t for _, t in chain} | set(_tokens(kwd))
+            best = None
+            for term in _split_candidates(recs, used):
+                t = probe_total(chain + [("AND", term)])
+                if not t or t >= parent_total:      # 쓸모없는 분할(전부 또는 0)
+                    continue
+                score = abs(t - parent_total / 2)
+                if best is None or score < best[0]:
+                    best = (score, term, t)
+                if score < parent_total * 0.1:      # 충분히 균형 — 더 안 재도 된다
+                    break
+            return best
+
+        def walk(chain, depth, seed=None):
+            nonlocal root_total
+            if len(out) >= max_records:
+                return
+            recs, m = seed if seed is not None else fetch(chain)
+            if depth == 0:
+                root_total = m["total"]
+            new = take(recs)
+            nodes.append({"chain": list(chain), "depth": depth, "total": m["total"],
+                          "fetched": m["fetched"], "new": new, "cap_hit": m["cap_hit"]})
+            if not m["cap_hit"] or depth >= max_depth:
+                return
+            best = pick_split(chain, recs, m["total"])
+            if best is None:
+                return                              # 쓸 만한 분할어가 없다 — 여기서 끝
+            _score, term, _t = best
+            walk(chain + [("AND", term)], depth + 1)
+            walk(chain + [("NOT", term)], depth + 1)
+
+        walk([], 0)
+        out = out[:max_records]
+        leaves = [n for n in nodes if n["cap_hit"] and n["depth"] >= max_depth]
+        meta = {
+            "term": kwd,
+            "mode": "fslot_bisect",
+            "max_depth": max_depth,
+            "nodes": len(nodes),
+            "fetched": len(out),
+            "root_total": root_total,
+            "still_capped": [_chain_label(kwd, n["chain"]) for n in leaves],
+            "requests": requests,
+            "api_record_cap": API_RECORD_CAP,
+        }
+        if root_total > len(out):
+            meta["unreachable"] = root_total - len(out)
+            meta["warning"] = (
+                f"⚠️ f-슬롯 이분할로 {len(out):,}건을 회수했으나 전수가 아닙니다 "
+                f"(전체 {root_total:,}건, 도달불가 {root_total - len(out):,}건). "
+                f"조각 {len(nodes)}개를 훑었고 {len(leaves)}개가 깊이 상한에서 여전히 500건을 "
+                f"넘습니다 — `bisect_depth` 를 올리거나 `sort_depth` 를 함께 쓰세요."
+            )
+        return out, meta
+
     # ── 다축 재귀 분할 — 500 상한을 부분적으로 우회 ───────────────────────────
     def search_partitioned_meta(self, kwd: str, *, axes=None, max_depth: int = 2,
                                 max_records: int = API_RECORD_CAP * 12,
@@ -500,7 +647,7 @@ class NlClient:
                           page_size: int = MAX_PAGE_SIZE, contains=None,
                           year_from: int | None = None, year_to: int | None = None,
                           auto_partition: bool = False, partition_depth: int = 2,
-                          sort_depth: int = 0,
+                          sort_depth: int = 0, bisect_depth: int = 0,
                           **extra) -> tuple[list[Holding], dict]:
         """여러 검색어를 **각각 조회해 합집합** + 축별 회수 메타.
 
@@ -526,9 +673,17 @@ class NlClient:
         stopped_early = False
         partitioned: list[str] = []
         swept: list[str] = []
+        bisected: list[str] = []
 
         for term in terms:
-            if sort_depth > 0:
+            if bisect_depth > 0:
+                # f-슬롯 이분할 — 다른 축을 소진했을 때의 최후 수단(보통은 분할+정렬이 낫다)
+                recs, m = self.search_bisect_meta(
+                    term, srch_target=srch_target, max_depth=bisect_depth,
+                    sort_depth=sort_depth, category=category,
+                    max_records=max_records, page_size=page_size, **extra)
+                bisected.append(term)
+            elif sort_depth > 0:
                 # 정렬 뒤집기만으로도 상한을 크게 넘긴다(실측 1,856건 → 7요청 94%).
                 recs, m = self.search_sweep_meta(
                     term, sort_depth=sort_depth, srch_target=srch_target,
@@ -590,6 +745,7 @@ class NlClient:
             "cap_hit_terms": [a["term"] for a in axes if a["cap_hit"]],
             "partitioned_terms": partitioned,
             "sort_swept_terms": swept,
+            "bisected_terms": bisected,
             "truncated": bool(stopped_early or len(axes) < len(terms)
                               or any(a["truncated"] for a in axes)),
         }
@@ -654,6 +810,41 @@ class NlClient:
     def search_terms(self, terms, **kw) -> list[Holding]:
         """레코드만 반환하는 얇은 래퍼."""
         return self.search_terms_meta(terms, **kw)[0]
+
+
+# 분할어 후보 추출용 토큰 — 한글 2자 이상 · 영문 3자 이상 · 4자리 연도
+_TOKEN = re.compile(r"[가-힣]{2,}|[A-Za-z]{3,}|(?<!\d)\d{4}(?!\d)")
+
+
+def _tokens(text: str) -> list[str]:
+    return _TOKEN.findall(text or "")
+
+
+def _split_candidates(records, used: set, limit: int = 6) -> list[str]:
+    """받은 레코드 제목에서 **분할어 후보**를 뽑는다 — 문서빈도가 절반에 가까운 순.
+
+    f-슬롯 이분할의 유일한 난제가 이것이다. 한쪽으로 쏠리면(예: 1,856 → 1,850 + 6)
+    깊이만 깊어지고 회수는 안 는다. 표본에서 **절반쯤 등장하는 토큰**을 고르면
+    한 번에 반씩 줄어 깊이가 얕아진다.
+
+    ⚠️ 표본은 상한에 걸린 상위 500건이라 편향돼 있다. 그래서 후보를 여러 개 돌려주고,
+       실제 분할 결과가 쓸모없으면(한쪽이 0 이거나 부모 전체) 다음 후보로 넘어간다.
+    """
+    df: dict[str, int] = {}
+    for h in records:
+        for tok in set(_tokens(h.title)):
+            if tok in used or any(tok in u or u in tok for u in used):
+                continue
+            df[tok] = df.get(tok, 0) + 1
+    n = len(records) or 1
+    # 0.5 에서 가까운 순, 동률이면 빈도가 높은 쪽(표본 대표성)
+    ranked = sorted(df.items(), key=lambda kv: (abs(kv[1] / n - 0.5), -kv[1]))
+    return [t for t, cnt in ranked if 1 < cnt < n][:limit]
+
+
+def _chain_label(base: str, chain) -> str:
+    """조건 사슬을 사람이 읽는 한 줄로 — `교육복지 NOT 학교 AND 지역`."""
+    return " ".join([base] + [f"{op} {t}" for op, t in chain])
 
 
 def _cell_label(fixed: dict) -> str:

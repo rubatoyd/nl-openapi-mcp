@@ -149,7 +149,7 @@ def nl_search(kwd: str, srch_target: str = "title", exact: bool = False,
 def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
                srch_target: str = "title", exact: bool = False,
                category: str | None = None, auto_partition: bool = False,
-               partition_depth: int = 2, sort_depth: int = 0,
+               partition_depth: int = 2, sort_depth: int = 0, bisect_depth: int = 0,
                year_from: int | None = None, year_to: int | None = None,
                contains: list[str] | None = None, formats: list[str] | None = None,
                max_records: int = 500, out_dir: str | None = None,
@@ -182,6 +182,12 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
       → `+iauthor` **1,746(94%)**, 단 **7요청**. **분할보다 훨씬 싸다.**
       `auto_partition` 과 **함께 쓸 수 있다**(축을 쪼갠 뒤 각 조각을 다시 훑는다).
       ⚠️ 상한에 걸리지 않은 검색식은 훑지 않는다(호출 낭비 없음).
+    bisect_depth: f-슬롯 AND/NOT **재귀 이분할**(0~8, 기본 0=끄기).
+      `AND + NOT = 부모` 가 모든 깊이에서 정확해 누락이 없고 임의 깊이로 쪼갤 수 있다.
+      🔴 **그러나 보통은 `auto_partition`+`sort_depth` 가 더 낫다** — 실측
+         `교육`/`도서`(197,651건): 분할3+정렬1 **17,893건/60요청** vs
+         이분할8+정렬1 11,633건/**135요청**(회수는 적고 요청은 2배).
+      쓸 자리: category·manageName·licYn 를 전부 고정한 조각이 여전히 500을 넘을 때.
     contains: 결과 텍스트 부분일치 후처리. year_from/year_to: 발행연도 필터.
     formats: xlsx/csv/json/sqlite (기본 3종). save=false 면 저장 없이 미리보기만.
     out_dir 미지정 시 홈의 nl-output/. extra_params: 임의 API 파라미터 전달.
@@ -213,6 +219,7 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
             kws, srch_target=srch_target, category=category,
             auto_partition=auto_partition, partition_depth=max(1, min(partition_depth, 3)),
             sort_depth=max(0, min(sort_depth, 5)),
+            bisect_depth=max(0, min(bisect_depth, 8)),
             year_from=year_from, year_to=year_to, contains=contains,
             max_records=max_records, **extra)
     except NlError as e:

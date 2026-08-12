@@ -471,3 +471,86 @@ def test_검증된_정렬필드만_쓴다():
         assert f.startswith("i")                   # 색인 필드명 규칙
     assert "ikdc" not in SORT_FIELDS               # 실측 무시됨
     assert "pub_year" not in SORT_FIELDS           # i 없는 이름은 무시됨
+
+
+# ══ f-슬롯 AND/NOT 재귀 이분할 ════════════════════════════════════════════════
+class FSlotServer:
+    """f-슬롯 불리언을 흉내낸다 — `AND + NOT = 부모` 가 정확히 성립하도록.
+
+    실측 확인: 교육복지(1,856) → AND 학교 163 + NOT 학교 1,693 = 1,856,
+    4분할 20+143+188+1505 = 1,856, 깊이3 150+1355 = 1505. 좌결합·순차 적용.
+    """
+
+    def __init__(self, n=1856, vocab=("학교", "지역", "정책", "아동", "연구")):
+        self.calls = []
+        # 각 레코드에 어휘를 결정적으로 배분 → 조건 사슬이 정확히 분할한다
+        self.pop = [{"id": f"ID{i:07d}",
+                     "toks": {w for j, w in enumerate(vocab) if (i >> j) & 1}}
+                    for i in range(n)]
+
+    def _match(self, params):
+        out = self.pop
+        i = 1
+        while params.get(f"v{i + 1}"):
+            op, term = params.get(f"and{i}", "AND"), params[f"v{i + 1}"]
+            out = [r for r in out if (term in r["toks"]) == (op == "AND")]
+            i += 1
+        return out
+
+    def __call__(self, params):
+        self.calls.append(dict(params))
+        hits = self._match(params)
+        total = len(hits)
+        page, size = int(params["pageNum"]), int(params["pageSize"])
+        start, end = (page - 1) * size, min(page * size, total, API_RECORD_CAP)
+        if start >= min(total, API_RECORD_CAP):
+            return json.dumps({"total": total, "sort": ""}, ensure_ascii=False)
+        recs = [{**samples.OFFLINE_FULL, "id": r["id"],
+                 "titleInfo": "교육복지 " + " ".join(sorted(r["toks"]))}
+                for r in hits[start:end]]
+        return json.dumps({"total": total, "result": recs}, ensure_ascii=False)
+
+
+def test_이분할이_상한을_넘긴다(monkeypatch):
+    c = NlClient(api_key="k", throttle=0)
+    f = FSlotServer(); monkeypatch.setattr(c, "_call", f)
+    recs, meta = c.search_bisect_meta("교육복지", max_depth=6, max_records=99_999)
+    assert len(recs) > API_RECORD_CAP
+    assert meta["mode"] == "fslot_bisect"
+    assert meta["root_total"] == 1856
+    assert len(recs) <= meta["root_total"]
+
+
+def test_이분할_조건사슬이_f슬롯_규격을_따른다(monkeypatch):
+    """f1/v1 이 기준어, and1↔f2/v2 로 이어진다(좌결합). detailSearch=true 필수."""
+    c = NlClient(api_key="k", throttle=0)
+    f = FSlotServer(); monkeypatch.setattr(c, "_call", f)
+    c.search_bisect_meta("교육복지", max_depth=2, max_records=99_999)
+    assert all(call.get("detailSearch") == "true" for call in f.calls)
+    assert all(call.get("v1") == "교육복지" for call in f.calls)
+    chained = [call for call in f.calls if call.get("v2")]
+    assert chained, "이분할이 한 번도 일어나지 않았다"
+    for call in chained:
+        assert call["and1"] in ("AND", "NOT")
+        assert call["f2"] == "title"
+
+
+def test_분할어를_실제_크기로_고른다(monkeypatch):
+    """표본 빈도만 보면 쏠린 분할이 나온다 — 1건짜리 요청으로 미리 재서 균형을 맞춘다."""
+    c = NlClient(api_key="k", throttle=0)
+    f = FSlotServer(); monkeypatch.setattr(c, "_call", f)
+    c.search_bisect_meta("교육복지", max_depth=2, max_records=99_999)
+    probes = [call for call in f.calls if int(call["pageSize"]) == 1 and call.get("v2")]
+    assert probes, "분할어 크기를 미리 재지 않았다"
+
+
+def test_이분할은_기본_비활성이고_열등함을_밝힌다():
+    """실측: 교육/도서 197,651건에서 분할3+정렬1(17,893/60요청)이
+    이분할8+정렬1(11,633/135요청)보다 낫다. 기본으로 켜면 안 된다."""
+    import inspect
+    assert inspect.signature(srv.nl_collect).parameters["bisect_depth"].default == 0
+    doc = srv.nl_collect.__doc__
+    assert "17,893" in doc and "135요청" in doc      # 열등함을 숫자로 제시
+    assert "더 낫다" in doc
+    from nl_mcp.cli import build_parser
+    assert build_parser().parse_args(["collect", "--kwd", "x"]).bisect_depth == 0
