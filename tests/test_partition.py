@@ -279,3 +279,87 @@ def test_분할_대상_자료구분은_설정의_12종이다(client):
     _, meta = c.search_by_category_meta("교육복지", max_records=10_000)
     queried = {call.get("category") for call in c._fake.calls}
     assert queried == set(CATEGORIES)
+
+
+# ══ 코드 리뷰(2026-08-12, PR #1) 지적 회귀 ═════════════════════════════════════
+def test_도구_기본값에서도_분할이_실제로_돈다(client, monkeypatch):
+    """🔴 `max_records` 기본 500 이면 분할해도 담을 자리가 없어 **아무 일도 안 일어났다.**
+
+    루트가 500 을 채우면 자식 반복이 `len(out) >= max_records` 로 즉시 break 하고,
+    `len(p_recs) > len(recs)` 가 500==500 이라 교체도 무산돼 `partitioned_terms=[]` 였다.
+    대표 기능이 기본 설정에서 조용히 죽어 있던 것.
+    """
+    c = client()
+    monkeypatch.setattr(srv, "get_api_key", lambda: "k")
+    monkeypatch.setattr(srv, "NlClient", lambda *a, **kw: c)
+    out = srv.nl_collect(kwd="교육복지", auto_partition=True, save=False)   # max_records 기본
+    assert out["count"] > API_RECORD_CAP
+    assert out["meta"]["partitioned_terms"] == ["교육복지"]
+    # 천장을 올렸다는 사실을 조용히 넘기지 않는다
+    assert "max_records" in out["note"]
+    assert out["meta"]["max_records_raised_from"] == API_RECORD_CAP
+
+
+def test_미리보기에서도_상향_안내가_남는다(client, monkeypatch):
+    """save=false 분기가 note 를 덮어써 상향 안내를 지우면 안 된다."""
+    c = client()
+    monkeypatch.setattr(srv, "get_api_key", lambda: "k")
+    monkeypatch.setattr(srv, "NlClient", lambda *a, **kw: c)
+    out = srv.nl_collect(kwd="교육복지", auto_partition=True, save=False)
+    assert "max_records" in out["note"] and "save=false" in out["note"]
+
+
+def test_분할_후_남은_상한_조각을_경고에_싣는다(client):
+    """🔴 잘못된 키(`capped_categories`)를 봐서 이 꼬리가 **한 번도 안 붙었다.**
+
+    사용자는 '분할해 재수집했습니다'만 읽고 전수로 오독하게 된다 —
+    이 프로젝트가 막겠다고 한 조용한 절단 그 자체다.
+    """
+    c = client()
+    _, meta = c.search_terms_meta(["교육복지"], max_records=99_999, auto_partition=True)
+    w = meta["warning"]
+    assert "여전히 500건을 넘어" in w
+    assert "전수가 아닙니다" in w
+    assert "도서/본관" in w                 # dict 가 아니라 사람이 읽는 라벨로
+
+
+def test_분할이_무산되면_원인을_짚어준다(client):
+    """켜져 있는 옵션을 다시 켜라고 안내하면 안 된다 — 진짜 원인(max_records)을 말해야 한다."""
+    c = client()
+    _, meta = c.search_terms_meta(["교육복지"], max_records=API_RECORD_CAP,
+                                  auto_partition=True)
+    assert meta["partitioned_terms"] == []
+    w = meta["warning"]
+    assert "분할이 일어나지 않았습니다" in w
+    assert "max_records" in w
+    assert "auto_partition=True` 로" not in w      # 이미 켠 것을 또 켜라고 하지 않는다
+
+
+def test_preset_축이_있어도_다음_축으로_넘어간다(client):
+    """🔴 재귀 깊이와 축 인덱스를 같은 변수로 써서, preset 축을 만나면 재귀가 통째로 끝났다."""
+    c = client()
+    recs, meta = c.search_partitioned_meta("교육복지", category="도서", max_depth=2,
+                                           max_records=99_999)
+    used = {k for call in c._fake.calls for k in ("manageName", "licYn") if call.get(k)}
+    assert "manageName" in used              # 다음 축으로 실제로 넘어갔다
+    assert meta["nodes"] > 1
+    assert len(recs) > API_RECORD_CAP
+
+
+def test_루트_요청을_두_번_보내지_않는다(client):
+    """search_terms_meta 가 받아둔 루트 조각을 씨앗으로 넘겨 동일 요청 중복을 없앤다."""
+    c = client()
+    c.search_terms_meta(["교육복지"], max_records=99_999, auto_partition=True)
+    root = [x for x in c._fake.calls
+            if not x.get("category") and not x.get("manageName") and not x.get("licYn")]
+    assert len(root) == 1
+
+
+def test_CLI_에_분할_구문검색_인자가_있다():
+    """공용 코어 원칙 — MCP 로 되는 것은 CLI 로도 돼야 한다."""
+    from nl_mcp.cli import build_parser
+    ns = build_parser().parse_args(
+        ["collect", "--kwd", "교육복지", "--auto-partition", "--partition-depth", "3", "--exact"])
+    assert ns.auto_partition is True and ns.partition_depth == 3 and ns.exact is True
+    d = build_parser().parse_args(["collect", "--kwd", "x"])
+    assert d.auto_partition is False and d.partition_depth == 2 and d.exact is False

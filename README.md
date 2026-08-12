@@ -145,6 +145,9 @@ cp .env.example .env   # NL_API_KEY 를 채워 넣으세요 (.env 는 gitignore 
 nl status
 nl search 교육불평등 --category 도서 --rows 20
 nl collect --terms 교육불평등 교육격차 학력격차 --category 도서 --format xlsx json
+
+# 500 상한을 넘겨 모으기 (MCP 의 auto_partition 과 동일)
+nl collect --kwd 교육복지 --auto-partition --partition-depth 3 --format xlsx
 ```
 
 ---

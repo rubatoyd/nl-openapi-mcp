@@ -235,8 +235,8 @@ class NlClient:
     # ── 다축 재귀 분할 — 500 상한을 부분적으로 우회 ───────────────────────────
     def search_partitioned_meta(self, kwd: str, *, axes=None, max_depth: int = 2,
                                 max_records: int = API_RECORD_CAP * 12,
-                                page_size: int = MAX_PAGE_SIZE, **extra
-                                ) -> tuple[list[Holding], dict]:
+                                page_size: int = MAX_PAGE_SIZE, initial_root=None,
+                                **extra) -> tuple[list[Holding], dict]:
         """서버측 축으로 검색 공간을 **재귀 분할**해 500 상한을 넘겨 회수한다.
 
         ✅ 실측 축(2026-08-12) — 응답 필드명을 파라미터로 넘겨 찾았다:
@@ -273,30 +273,42 @@ class NlClient:
                 new += 1
             return new
 
-        def walk(fixed: dict, depth: int) -> None:
+        def walk(fixed: dict, depth: int, axis_i: int, seed=None) -> None:
+            """fixed 조건으로 한 조각을 받고, 상한에 걸렸으면 다음 축으로 더 쪼갠다.
+
+            ⚠️ `depth`(재귀 깊이)와 `axis_i`(축 목록 인덱스)를 **분리해야 한다.** 하나로 쓰면
+               호출자가 이미 고정한 축(preset)을 만났을 때 다음 축으로 넘어가지 못하고
+               재귀가 통째로 끝난다.
+            seed: 이미 받아둔 (records, meta) — 같은 요청을 두 번 보내지 않기 위한 것.
+            """
             nonlocal requests
             if len(out) >= max_records:
                 return
-            recs, m = self.search_meta(
-                kwd, max_records=min(API_RECORD_CAP, max_records - len(out)),
-                page_size=page_size, **fixed, **extra)
-            requests += m["requests"]
+            if seed is not None:
+                recs, m = seed
+            else:
+                recs, m = self.search_meta(
+                    kwd, max_records=min(API_RECORD_CAP, max_records - len(out)),
+                    page_size=page_size, **fixed, **extra)
+                requests += m["requests"]
             new = take(recs)
             nodes.append({"fixed": dict(fixed), "depth": depth, "total": m["total"],
                           "fetched": m["fetched"], "new": new, "cap_hit": m["cap_hit"]})
-            # 상한에 걸렸고 아직 쓸 축이 남았으면 더 쪼갠다
-            if not m["cap_hit"] or depth >= max_depth or depth >= len(axis_list):
+            if not m["cap_hit"] or depth >= max_depth:
                 return
-            name, values = axis_list[depth]
-            if name in fixed:           # 호출자가 이미 고정한 축은 건너뛴다
+            # 이미 고정된 축은 **건너뛰고** 다음 축을 찾는다 (return 이 아니다)
+            while axis_i < len(axis_list) and axis_list[axis_i][0] in fixed:
+                axis_i += 1
+            if axis_i >= len(axis_list):
                 return
+            name, values = axis_list[axis_i]
             for v in values:
                 if len(out) >= max_records:
                     break
-                walk({**fixed, name: v}, depth + 1)
+                walk({**fixed, name: v}, depth + 1, axis_i + 1)
                 time.sleep(self.throttle)
 
-        walk(preset, 0)
+        walk(preset, 0, 0, seed=initial_root)
         out = out[:max_records]
 
         leaves = [n for n in nodes if n["cap_hit"]]
@@ -429,11 +441,16 @@ class NlClient:
 
             # 500 상한에 걸렸고 자료구분을 지정하지 않았다면, 자료구분별로 나눠 다시 받는다.
             # (자료구분은 겹치지 않는 완전 분할임이 실측 확인됐다 — search_by_category_meta 참조)
-            if auto_partition and m["cap_hit"] and not category:
+            # ⚠️ `max_records` 가 상한 이하면 분할해봐야 결과가 어차피 잘린다 —
+            #    수십 번의 호출만 낭비하므로 아예 시도하지 않고 경고로 원인을 알린다.
+            if (auto_partition and m["cap_hit"] and not category
+                    and max_records > API_RECORD_CAP):
                 p_recs, p_meta = self.search_partitioned_meta(
                     term, srch_target=srch_target, max_depth=partition_depth,
-                    max_records=max(max_records - len(out), API_RECORD_CAP),
-                    page_size=page_size, **extra)
+                    max_records=max(max_records - len(out), API_RECORD_CAP + 1),
+                    page_size=page_size,
+                    # 방금 받은 루트 조각을 씨앗으로 넘긴다 — 같은 요청을 두 번 보내지 않는다
+                    initial_root=(recs, m), **extra)
                 if len(p_recs) > len(recs):      # 실제로 이득일 때만 교체
                     recs, m = p_recs, {**m, "partition": p_meta,
                                        "fetched": p_meta["fetched"],
@@ -486,21 +503,33 @@ class NlClient:
 
         warns = []
         if meta["cap_hit_terms"]:
-            still_capped = sorted({cat for a in axes for cat in
-                                   (a.get("partition", {}).get("capped_categories") or [])})
+            # ⚠️ 키 이름을 틀리면 이 꼬리가 **한 번도 안 붙는다** — 사용자가 '분할했다'만 읽고
+            #    전수로 오독하게 되어, 이 프로젝트가 막으려는 조용한 절단이 그대로 발생한다.
+            #    (search_partitioned_meta 가 내보내는 키는 `still_capped` 이고 값은 dict 목록이다.)
+            still = [n for a in axes for n in (a.get("partition", {}).get("still_capped") or [])]
+            labels = sorted({_cell_label(n) for n in still})
             if partitioned:
                 warns.append(
                     f"⚠️ 500건 상한에 걸린 검색어({', '.join(meta['cap_hit_terms'])})를 "
-                    f"자료구분별로 분할해 재수집했습니다({', '.join(partitioned)}). "
-                    + (f"그래도 자료구분 {', '.join(still_capped)} 는 여전히 500건을 넘어 "
-                       f"전수가 아닙니다 — 검색어를 더 좁히거나 exact=True 로 재조회하세요. "
-                       if still_capped else "")
+                    f"서버측 축으로 분할해 재수집했습니다({', '.join(partitioned)}). "
+                    + (f"그래도 조각 {', '.join(labels)} 는 여전히 500건을 넘어 **전수가 아닙니다** "
+                       f"— 검색어를 더 좁히거나 partition_depth 를 올리세요. "
+                       if labels else "")
+                )
+            elif auto_partition and not category:
+                # 분할을 켰는데 아무 일도 안 일어난 경우 — 원인을 정확히 짚어준다
+                warns.append(
+                    f"⚠️ `auto_partition=True` 인데 분할이 일어나지 않았습니다"
+                    f"({', '.join(meta['cap_hit_terms'])}). "
+                    f"`max_records`({max_records})가 API 상한 {API_RECORD_CAP}건 이하라 "
+                    f"분할해도 더 담을 자리가 없습니다 — `max_records` 를 "
+                    f"{API_RECORD_CAP}보다 크게 잡으세요."
                 )
             else:
                 warns.append(
                     f"⚠️ API 500건 상한에 걸린 검색어: {', '.join(meta['cap_hit_terms'])}. "
                     f"max_records 를 올려도 501번째부터 받을 수 없습니다 — "
-                    + ("① **`auto_partition=True`** 로 자료구분별 분할 수집(실측 4~9배 회복) "
+                    + ("① **`auto_partition=True`** 로 서버측 축 분할 수집(실측 회복 7%→67%) "
                        if not category else "① 검색어를 더 좁게 쪼개거나 ")
                     + f"② exact=True 로 구문검색하면 total 자체가 줄어듭니다. "
                     f"**연도로는 쪼갤 수 없습니다** — 서버측 연도 필터가 없습니다(실측)."
@@ -517,6 +546,14 @@ class NlClient:
     def search_terms(self, terms, **kw) -> list[Holding]:
         """레코드만 반환하는 얇은 래퍼."""
         return self.search_terms_meta(terms, **kw)[0]
+
+
+def _cell_label(fixed: dict) -> str:
+    """분할 조각을 사람이 읽는 한 줄로 — `{"category":"도서","manageName":"본관"}` → `도서/본관`.
+
+    (dict 를 그대로 join 하면 의미 없는 문자열이 나온다.)
+    """
+    return "/".join(str(v) for v in fixed.values()) or "(전체)"
 
 
 def _truncation_warning(meta: dict) -> str:

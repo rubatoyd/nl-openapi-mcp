@@ -13,7 +13,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .client import NlClient, NlError
-from .config import API_RECORD_CAP, get_api_key
+from .config import API_RECORD_CAP, CATEGORIES, get_api_key
 
 mcp = FastMCP("nl")
 
@@ -194,6 +194,11 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
     extra = {k: v for k, v in (extra_params or {}).items() if v not in (None, "")}
     if exact:
         extra["exact"] = True
+    # ⚠️ `max_records` 가 API 상한 이하이면 분할해도 더 담을 자리가 없어 **아무 일도 안 일어난다.**
+    #    auto_partition 을 켠 것은 500 을 넘겨 받겠다는 뜻이므로 천장을 올린다(조용히 하지 않고 보고).
+    raised_from = None
+    if auto_partition and max_records <= API_RECORD_CAP:
+        raised_from, max_records = max_records, API_RECORD_CAP * len(CATEGORIES)
     try:
         recs, meta = NlClient().search_terms_meta(
             kws, srch_target=srch_target, category=category,
@@ -204,11 +209,17 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
         return {"error": str(e)}
 
     out = {"count": len(recs), "terms": kws, "truncated": meta["truncated"], "meta": meta}
+    if raised_from is not None:
+        out["note"] = (f"auto_partition=True 이므로 max_records 를 {raised_from} → {max_records} 로 "
+                       f"올렸습니다. 상한({API_RECORD_CAP}) 이하로는 분할해도 더 담을 자리가 없습니다.")
+        meta["max_records_raised_from"] = raised_from
     if meta.get("warning"):
         out["warning"] = meta["warning"]
     if not save:
         out["preview"] = [r.to_row() for r in recs[:100]]
-        out["note"] = "save=false — 파일을 만들지 않았습니다(앞 100건 미리보기)."
+        # ⚠️ note 를 덮어쓰면 위의 max_records 상향 안내가 사라진다 — 이어 붙인다
+        out["note"] = " ".join(filter(None, [
+            out.get("note"), "save=false — 파일을 만들지 않았습니다(앞 100건 미리보기)."]))
         return out
 
     from .exporters import export
