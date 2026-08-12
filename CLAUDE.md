@@ -105,5 +105,9 @@ packaging/binary/  # PyInstaller 자체완결 바이너리용 entry + manifest
   2026-08-12 `gh api …/git/ref/tags/v9` 로 **부재 재확인** → `@v9.0.0` 정확 고정.
   `actions/*`(checkout v7·setup-python v7·upload-artifact v7·download-artifact v8·setup-node v7)는
   이동 태그가 살아 있음을 같은 방법으로 확인했다.
-- ⏭️ 다음: ① 접속 복구 후 라이브 전수 검증(`srchTarget` 값·`sort`·오류 봉투 철자·500 상한 재확인)
+- ✅ **main 푸시 + CI 통과** (`8b335d1`) — `uvx --from git+…/rubatoyd/nl-openapi-mcp` 경로 사용 가능.
+- ⏸️ **v0.2.0 태그 보류** — 태그는 **취소 불가능한 레지스트리 발행**을 촉발한다.
+  실제 API 응답을 한 번도 받지 못한 상태이므로 라이브 검증 후 태그한다(2026-08-12 결정).
+- ⏭️ 다음: ① 접속 복구 후 라이브 전수 검증(`srchTarget` 값·`sort`·오류 봉투 철자·
+  **500 상한 기준이 오프셋인지 페이지인지** — `pageSize=10` 으로 판별 가능·하이라이트 마크업 실형태)
   → ② v0.2.0 태그 푸시로 릴리스·레지스트리 발행 → ③ 500 상한 자동 분할 수집 전략 검토.
