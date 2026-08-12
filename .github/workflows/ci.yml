@@ -37,22 +37,25 @@ jobs:
         run: |
           uv run --no-project --with . python -c "import mcp.server.fastmcp; print('mcp.server.fastmcp OK')"
 
-      - name: 콜드 스타트 스모크 (클라이언트와 동일 경로)
+      - name: 콜드 스타트 스모크 (클라이언트와 동일 경로 · 핸드셰이크 + 도구 노출)
+        # ⚠️ stdin 을 곧바로 닫으면 서버가 **응답을 내보내기 전에** EOF 로 종료해 버린다.
+        #    실제로 tools/list 가 처리(stderr 에 ListToolsRequest 기록)됐는데도 stdout 이 빈
+        #    경합이 관측됐다. `sleep` 으로 stdin 을 잠깐 열어두어 응답을 받아낸다.
         run: |
-          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
-            | uvx --from . nl-mcp > handshake.jsonl
-          cat handshake.jsonl
-          grep -q '"serverInfo"' handshake.jsonl || { echo "::error::MCP handshake 실패 — 클라이언트가 이 커밋으로 기동할 수 없다"; exit 1; }
-          echo "handshake OK"
+          { printf '%s\n' \
+              '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+              '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+              '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+            sleep 5
+          } | uvx --from . nl-mcp > smoke.jsonl || true
 
-      - name: 도구 3종 노출 확인
-        run: |
-          printf '%s\n' \
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
-            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-            | uvx --from . nl-mcp > tools.jsonl
+          echo "--- 서버 응답 ---"
+          cat smoke.jsonl
+          echo "-----------------"
+
+          grep -q '"serverInfo"' smoke.jsonl \
+            || { echo "::error::MCP handshake 실패 — 클라이언트가 이 커밋으로 기동할 수 없다"; exit 1; }
           for t in nl_status nl_search nl_collect; do
-            grep -q "\"$t\"" tools.jsonl || { echo "::error::도구 $t 가 노출되지 않았다"; exit 1; }
+            grep -q "\"$t\"" smoke.jsonl || { echo "::error::도구 $t 가 노출되지 않았다"; exit 1; }
           done
-          echo "tools OK"
+          echo "handshake + tools OK"
