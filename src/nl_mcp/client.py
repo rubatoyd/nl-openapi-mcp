@@ -15,6 +15,7 @@ import requests
 
 from .config import (
     API_RECORD_CAP,
+    CATEGORIES,
     MAX_PAGE_SIZE,
     SEARCH_API_URL,
     require_api_key,
@@ -224,11 +225,79 @@ class NlClient:
         """레코드만 반환하는 얇은 래퍼. 절단 여부까지 필요하면 search_meta() 를 쓴다."""
         return self.search_meta(kwd, **kw)[0]
 
+    # ── 자료구분 분할 — 500 상한을 부분적으로 우회 ────────────────────────────
+    def search_by_category_meta(self, kwd: str, *, categories=None,
+                                max_records: int = API_RECORD_CAP * len(CATEGORIES),
+                                page_size: int = MAX_PAGE_SIZE, **extra
+                                ) -> tuple[list[Holding], dict]:
+        """`category` 를 자료구분별로 나눠 각각 조회한 뒤 합집합.
+
+        ✅ 실측 근거(2026-08-12): **자료구분별 total 의 합이 category 생략 시 total 과 정확히
+           일치**한다 — `교육복지` 7,028=7,028 · `교육` 784,809=784,809 · `교육불평등` 382=382.
+           즉 자료구분은 겹치지 않는 완전 분할이므로 쪼개서 합치면 회수량이 늘어난다.
+
+        실측 회복량:
+          `교육복지` 500 → 2,134건(4.3배) · `교육` 500 → 4,559건(9.1배)
+
+        ⚠️ **완전한 전수 수집이 아니다.** 개별 자료구분도 500을 넘을 수 있다
+           (`교육복지` 기사 3,879 · 도서 1,856). meta 의 `capped_categories` 와
+           `unreachable` 이 남은 손실을 보고한다.
+        """
+        cats = list(categories or CATEGORIES)
+        out: list[Holding] = []
+        seen: set[str] = set()
+        parts: list[dict] = []
+
+        for cat in cats:
+            if len(out) >= max_records:
+                break
+            recs, m = self.search_meta(kwd, category=cat,
+                                       max_records=min(API_RECORD_CAP, max_records - len(out)),
+                                       page_size=page_size, **extra)
+            new = 0
+            for h in recs:
+                k = h.dedup_key()
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(h)
+                new += 1
+            parts.append({"category": cat, "total": m["total"], "fetched": m["fetched"],
+                          "new": new, "cap_hit": m["cap_hit"], "requests": m["requests"]})
+            time.sleep(self.throttle)
+
+        out = out[:max_records]
+        part_total = sum(p["total"] for p in parts)
+        recoverable = sum(min(p["total"], API_RECORD_CAP) for p in parts)
+        capped = [p["category"] for p in parts if p["cap_hit"]]
+        meta = {
+            "term": kwd,
+            "mode": "category_partition",
+            "partitions": [p for p in parts if p["total"]],
+            "partition_total": part_total,
+            "fetched": len(out),
+            "recoverable_upper_bound": recoverable,
+            "unreachable": max(0, part_total - recoverable),
+            "capped_categories": capped,
+            "requests": sum(p["requests"] for p in parts),
+            "api_record_cap": API_RECORD_CAP,
+        }
+        if capped:
+            meta["warning"] = (
+                f"⚠️ 자료구분 분할로 {len(out):,}건까지 회수했으나 전수는 아닙니다. "
+                f"자료구분별 total 합 {part_total:,}건 중 상한 때문에 최대 {recoverable:,}건까지만 "
+                f"받을 수 있고 {meta['unreachable']:,}건은 도달 불가입니다. "
+                f"여전히 500건을 넘는 자료구분: {', '.join(capped)}. "
+                f"해당 자료구분은 검색어를 더 좁히거나 exact=True 로 재조회하세요."
+            )
+        return out, meta
+
     # ── 다중 검색어 합집합 ────────────────────────────────────────────────────
     def search_terms_meta(self, terms, *, srch_target: str = "title",
                           category: str | None = None, max_records: int = 2000,
                           page_size: int = MAX_PAGE_SIZE, contains=None,
                           year_from: int | None = None, year_to: int | None = None,
+                          auto_partition: bool = False,
                           **extra) -> tuple[list[Holding], dict]:
         """여러 검색어를 **각각 조회해 합집합** + 축별 회수 메타.
 
@@ -239,21 +308,40 @@ class NlClient:
            즉 검색식 표현력이 이보다 클 가능성이 있으며, API 가 그것을 노출하는지는 미검증이다
            → `scripts/probe_api.py` 로 확인 후 이 전략을 정교화할 것.
 
+        auto_partition=True 이면, 500 상한에 걸린 검색어를 **자료구분별로 나눠 재수집**한다
+        (`category` 를 지정하지 않은 경우에만). 실측 회복량 4~9배 — search_by_category_meta 참조.
+
         연도 필터는 **회수 후 로컬 후처리**다(`pub_year` 4자리 정규화 기준).
-        ⚠️ 로컬 필터라 500 상한을 풀어주지 않는다. 고급검색 UI 에는 '발행년 …부터' **서버측
-           범위 필터**가 있으므로, API 가 같은 파라미터를 받는다면 연도 슬라이싱으로 상한을
-           우회할 수 있다 — 파라미터명이 확인되면 `**extra` 로 넘겨 쓸 수 있다.
+        ⚠️ 로컬 필터라 500 상한을 풀어주지 않는다. **서버측 연도 범위 필터는 존재하지 않는다**
+           (실측: 11개 파라미터명 후보 전부 무시). 상한 우회는 자료구분 분할·검색어 세분화·
+           구문검색뿐이다.
         """
         terms = [t.strip() for t in (terms or []) if t and t.strip()]
         out: list[Holding] = []
         seen: set[str] = set()
         axes: list[dict] = []
         stopped_early = False
+        partitioned: list[str] = []
 
         for term in terms:
             recs, m = self.search_meta(
                 term, srch_target=srch_target, category=category,
                 max_records=max_records, page_size=page_size, **extra)
+
+            # 500 상한에 걸렸고 자료구분을 지정하지 않았다면, 자료구분별로 나눠 다시 받는다.
+            # (자료구분은 겹치지 않는 완전 분할임이 실측 확인됐다 — search_by_category_meta 참조)
+            if auto_partition and m["cap_hit"] and not category:
+                p_recs, p_meta = self.search_by_category_meta(
+                    term, srch_target=srch_target,
+                    max_records=max(max_records - len(out), API_RECORD_CAP),
+                    page_size=page_size, **extra)
+                if len(p_recs) > len(recs):      # 실제로 이득일 때만 교체
+                    recs, m = p_recs, {**m, "partition": p_meta,
+                                       "fetched": p_meta["fetched"],
+                                       "returned": p_meta["fetched"],
+                                       "requests": m["requests"] + p_meta["requests"]}
+                    partitioned.append(term)
+
             new = 0
             for h in recs:
                 k = h.dedup_key()
@@ -277,6 +365,7 @@ class NlClient:
             "max_records": max_records,
             "api_record_cap": API_RECORD_CAP,
             "cap_hit_terms": [a["term"] for a in axes if a["cap_hit"]],
+            "partitioned_terms": partitioned,
             "truncated": bool(stopped_early or len(axes) < len(terms)
                               or any(a["truncated"] for a in axes)),
         }
@@ -298,14 +387,25 @@ class NlClient:
 
         warns = []
         if meta["cap_hit_terms"]:
-            warns.append(
-                f"⚠️ API 500건 상한에 걸린 검색어: {', '.join(meta['cap_hit_terms'])}. "
-                f"이 검색어들은 max_records 를 올려도 501번째부터 받을 수 없습니다 — "
-                f"① category 를 자료구분별로 나눠 각각 조회하거나(자료구분별 total 의 합이 "
-                f"전체와 일치함이 실측 확인됨) ② 검색어를 더 좁게 쪼개거나 "
-                f"③ exact=True 로 구문검색하면 total 자체가 줄어듭니다. "
-                f"**연도로는 쪼갤 수 없습니다** — 서버측 연도 필터가 없습니다(실측)."
-            )
+            still_capped = sorted({cat for a in axes for cat in
+                                   (a.get("partition", {}).get("capped_categories") or [])})
+            if partitioned:
+                warns.append(
+                    f"⚠️ 500건 상한에 걸린 검색어({', '.join(meta['cap_hit_terms'])})를 "
+                    f"자료구분별로 분할해 재수집했습니다({', '.join(partitioned)}). "
+                    + (f"그래도 자료구분 {', '.join(still_capped)} 는 여전히 500건을 넘어 "
+                       f"전수가 아닙니다 — 검색어를 더 좁히거나 exact=True 로 재조회하세요. "
+                       if still_capped else "")
+                )
+            else:
+                warns.append(
+                    f"⚠️ API 500건 상한에 걸린 검색어: {', '.join(meta['cap_hit_terms'])}. "
+                    f"max_records 를 올려도 501번째부터 받을 수 없습니다 — "
+                    + ("① **`auto_partition=True`** 로 자료구분별 분할 수집(실측 4~9배 회복) "
+                       if not category else "① 검색어를 더 좁게 쪼개거나 ")
+                    + f"② exact=True 로 구문검색하면 total 자체가 줄어듭니다. "
+                    f"**연도로는 쪼갤 수 없습니다** — 서버측 연도 필터가 없습니다(실측)."
+                )
         if stopped_early or len(axes) < len(terms):
             warns.append(
                 f"⚠️ max_records={max_records} 상한에 걸려 검색축 {len(axes)}/{len(terms)}개만 "
