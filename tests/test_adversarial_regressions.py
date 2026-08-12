@@ -172,3 +172,28 @@ def test_safe_name_은_빈값이면_대체값을_쓴다():
 
 def test_safe_name_은_한글을_보존한다():
     assert "교육불평등" in safe_name("교육불평등 수집")
+
+
+# ══ 응답 봉투의 자격증명 차단 (2026-08-12, kci 에서 역방향으로 옮겨온 검사) ═══════
+# kci 는 오류 봉투가 요청을 통째로 에코해 **인증키가 MCP 응답까지 샜다**(실측).
+# NL 도 `nl_status` 가 봉투를 그대로 싣는다 — 에코 여부가 확정되기 전까지 막아둔다.
+def test_봉투에_인증키가_있으면_제거된다():
+    import json as _json
+
+    from nl_mcp.parser import parse_search_response
+    body = {"total": 0, "kwd": "교육", "pageNum": 1, "key": "SECRET-NL-KEY-123",
+            "apiKey": "SECRET-NL-KEY-123", "sort": ""}
+    _t, _r, env = parse_search_response(_json.dumps(body))
+    blob = _json.dumps(env, ensure_ascii=False)
+    assert "SECRET-NL-KEY-123" not in blob, f"봉투에 인증키: {blob}"
+    assert env["kwd"] == "교육" and env["total"] == 0     # 대조군 — 정상 항목은 남는다
+
+
+def test_봉투_필터가_레코드_경로에서도_적용된다():
+    import json as _json
+
+    from nl_mcp.parser import parse_search_response
+    body = {"total": 1, "kwd": "교육", "key": "SECRET-NL-KEY-123",
+            "result": [{"id": "1", "titleInfo": "교육"}]}
+    _t, recs, env = parse_search_response(_json.dumps(body))
+    assert recs and "key" not in env and env["kwd"] == "교육"

@@ -133,6 +133,20 @@ def check_api_error(data: dict[str, Any]) -> None:
         )
 
 
+# 응답 봉투에서 **자격증명으로 보이는 항목은 지우고 내보낸다**.
+# `nl_status` 가 봉투를 도구 응답에 그대로 싣기 때문이다(→ LLM 트랜스크립트).
+# 이 API 가 `key` 를 에코하는지는 2026-08-12 현재 **라이브로 확정하지 못했다**
+# (수집해 둔 실응답 1,124건의 봉투에는 없었으나 오류 봉투는 미확인, 그 시점 망 차단).
+# 자매 프로젝트 kci 에서는 오류 봉투가 요청을 통째로 에코해 **인증키가 MCP 응답까지 샜다** —
+# 확정될 때까지 막아두는 쪽이 옳다. 값이 없으면 아무 일도 일어나지 않는다.
+_SECRET_KEYS = {"key", "apikey", "api_key", "authkey", "auth_key", "secret", "token"}
+
+
+def _envelope(data: dict) -> dict:
+    return {k: v for k, v in data.items()
+            if k != "result" and k.strip().lower() not in _SECRET_KEYS}
+
+
 def parse_search_response(body: str | dict[str, Any]) -> tuple[int, list[Holding], dict[str, Any]]:
     """검색 응답 → (total, 레코드 목록, 봉투 메타).
 
@@ -174,7 +188,7 @@ def parse_search_response(body: str | dict[str, Any]) -> tuple[int, list[Holding
         #    빈 목록으로 통과시키면 조용한 절단이 된다. 실측상 이 조합은 나타나지 않으므로
         #    이상 신호로 보고 오류로 올린다. (적대적 검증에서 이 구멍이 지적됐다.)
         total_v = _as_int(data.get("total")) if "total" in data else None
-        envelope = {k: v for k, v in data.items() if k != "result"}
+        envelope = _envelope(data)
         if total_v == 0:
             return 0, [], envelope
         if total_v is not None:
@@ -193,5 +207,5 @@ def parse_search_response(body: str | dict[str, Any]) -> tuple[int, list[Holding
         raise ParseError(f"`result` 타입이 배열이 아닙니다: {type(items).__name__}")
 
     records = [parse_holding(it) for it in items if isinstance(it, dict)]
-    envelope = {k: v for k, v in data.items() if k != "result"}
+    envelope = _envelope(data)
     return _as_int(data.get("total")), records, envelope
