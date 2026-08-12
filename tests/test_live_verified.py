@@ -128,6 +128,26 @@ def test_exact_옵션이_따옴표를_씌워_전송한다(monkeypatch):
     assert sent[-1]["kwd"] == "교육불평등"
 
 
+def test_exact_는_기본값이_아니다():
+    """🔴 코퍼스 수집에 exact 를 켜면 안 된다 — 실측으로 확정된 설계 결정.
+
+    재현율 손실 평균 47%, 최악 84%(교육형평성 31→5건). 버려진 249건 중 76%가
+    구성어를 모두 포함한 **관련 문헌**이었다. 원인은 한국어 복합어가 실제 표제에서
+    조사·수식어로 갈라지는데(`교육의 형평성`) 구문검색이 토큰 인접을 요구하는 것.
+    변형어를 3~5개로 늘려도 12건에 그쳐 기본 검색 31건에 못 미친다.
+
+    이 테스트는 나중에 "정밀도가 좋으니 기본값으로 하자"로 되돌아가는 것을 막는다.
+    """
+    import inspect
+    for tool in (srv.nl_search, srv.nl_collect):
+        assert inspect.signature(tool).parameters["exact"].default is False
+    # 도구 설명이 코퍼스 수집 부적합을 명시해야 한다
+    assert "코퍼스 수집에는 부적합" in srv.nl_search.__doc__
+    assert "코퍼스 수집에는 쓰지 말 것" in srv.nl_collect.__doc__
+    assert "84%" in srv.nl_search.__doc__          # 최악 손실률을 숫자로 제시
+    assert "특정 자료 조회" in srv.nl_collect.__doc__   # 대신 어디에 쓰는지도
+
+
 def test_exact_가_수집_경로까지_전달된다(monkeypatch):
     sent = []
 
@@ -177,9 +197,12 @@ def test_검증된_srchTarget():
     assert "isbn" in doc
 
 
-def test_도구_설명이_500_상한과_오탐을_알린다():
+def test_도구_설명이_핵심_함정을_알린다():
     for doc in (srv.nl_search.__doc__, srv.nl_collect.__doc__):
-        assert "500" in doc
-    assert "오탐" in srv.nl_search.__doc__
+        assert "500" in doc                       # 상한
+    # 기본 검색이 부분일치가 아니라는 사실
+    assert "토큰 매칭" in srv.nl_search.__doc__
     # 서버측 연도 필터가 없다는 사실(실측)을 수집 도구가 명시한다
     assert "서버측 연도 필터는 존재하지 않는다" in srv.nl_collect.__doc__
+    # exact 의 재현율 손실 경고(정정된 서술) — 옛 '오탐이 사라진다' 조언으로 되돌아가지 않도록
+    assert "재현율" in srv.nl_search.__doc__
