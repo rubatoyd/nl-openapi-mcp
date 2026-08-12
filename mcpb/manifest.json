@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "nl-openapi-mcp",
   "display_name": "국립중앙도서관 소장자료 검색기 (nl-openapi-mcp)",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "국립중앙도서관 소장자료 검색 OpenAPI 수집기 — 단행본·온라인자료 서지, KDC 분류, 청구기호, 원문 제공 여부. 500건 상한 절단을 명시적으로 보고합니다. xlsx/csv/json/sqlite 내보내기",
   "author": { "name": "Yeondong Yang", "url": "https://github.com/rubatoyd/nl-openapi-mcp" },
   "homepage": "https://github.com/rubatoyd/nl-openapi-mcp",

@@ -468,7 +468,11 @@ class NlClient:
                 new += 1
             axes.append({**m, "new": new})
             if len(out) >= max_records:
-                stopped_early = True
+                # ⚠️ **마지막 검색어면 남은 축이 없으므로 '조기 중단'이 아니다.**
+                #    그대로 True 로 두면 전수 수집한 코퍼스에 truncated 가 붙어, 사용자가
+                #    max_records 를 올려 무의미한 재수집을 반복하게 된다.
+                #    (자매 프로젝트 kci·scienceON 에서 확인된 결함 — 코드 형태가 같아 이식)
+                stopped_early = term is not terms[-1]
                 break
 
         out = out[:max_records]
