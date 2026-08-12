@@ -2,6 +2,9 @@
 
 <!-- mcp-name: io.github.rubatoyd/nl-openapi-mcp -->
 
+[![CI](https://github.com/rubatoyd/nl-openapi-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/rubatoyd/nl-openapi-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/rubatoyd/nl-openapi-mcp)](https://github.com/rubatoyd/nl-openapi-mcp/releases/latest)
+
 **국립중앙도서관 소장자료 검색** OpenAPI 를 Claude 등 MCP 클라이언트에서 바로 쓰는 서버 + CLI.
 단행본·온라인자료의 서지, KDC 분류, 청구기호, 원문 제공 여부를 검색·수집하고
 xlsx/csv/json/sqlite 로 내보냅니다.
