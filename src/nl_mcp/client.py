@@ -573,7 +573,9 @@ def _truncation_warning(meta: dict) -> str:
             f"**한 검색식당 {meta['api_record_cap']}건까지만** 내려줍니다(오류코드 012 DATA LIMIT 500). "
             f"max_records 를 올려도 나머지는 받을 수 없습니다 — `category` 분할·검색어 세분화·"
             f"`exact=True` 구문검색으로 각 조각이 {meta['api_record_cap']}건 미만이 되도록 쪼개세요. "
-            f"(⚠️ 서버측 연도 필터는 없으므로 **연도로는 쪼갤 수 없습니다** — 실측 확인)"
+            f"또는 `extra_params` 로 **정렬 뒤집기**(`sort=ipub_year`, `order=asc`/`desc`)를 쓰면 "
+            f"서로 겹치지 않는 두 집합을 받습니다(실측 asc∩desc=0). "
+            f"(⚠️ 서버측 연도 범위 필터는 확인되지 않았습니다 — 연도로는 쪼갤 수 없습니다)"
         )
     else:
         base = (

@@ -47,11 +47,15 @@ def test_빈값은_전달하지_않는다(spy):
     assert spy[0]["c"] == "v"
 
 
-def test_sort_는_도구에서_제거됐다():
-    """실측: `sort` 는 어떤 값을 줘도 결과 순서가 바뀌지 않는다(미지원).
+def test_sort_는_도구_인자로_노출되지_않는다():
+    """⚠️ 초판 근거였던 "sort 미지원"은 **틀렸다**(2026-08-12 재검증).
 
-    지원하지 않는 파라미터를 도구 인자로 노출하면 '정렬했다'는 착각을 만든다.
-    실험이 필요하면 extra_params 로 넘길 수 있다.
+    실제로는 `sort=ipub_year|ititle|iauthor|ipublisher|iregdate` + `order=asc|desc` 가 동작한다.
+    초판은 값 이름을 지어내 시험했다가(`title_asc`·`pubyear_desc` 등) 부재로 단정했다.
+
+    그럼에도 **도구 인자로는 노출하지 않는다** — 정렬 자체가 목적인 사용처가 없고,
+    쓸모는 '상한 우회를 위한 asc/desc 뒤집기'인데 그건 개별 인자가 아니라 수집 전략으로
+    다뤄야 하기 때문이다(⏭️ 미구현). 그때까지는 `extra_params` 로 실험할 수 있다.
     """
     import inspect
     assert "sort" not in inspect.signature(srv.nl_search).parameters
