@@ -104,31 +104,52 @@ class NlClient:
 
         meta 필드
           total          : API 가 보고한 전체 건수
-          fetched        : 실제 회수·중복제거 후 건수
+          fetched        : **API 로부터 실제 회수한** 건수(중복제거 후, contains 필터 전)
+          returned       : 후처리 필터까지 거쳐 최종 반환한 건수
           truncated      : fetched < total (=일부만 받았다)
           cap_hit        : total > 500 (=**나머지는 어떤 페이징으로도 받을 수 없다**)
           api_record_cap : 500
-          stopped_reason : exhausted | cap | max_records | empty_page
+          stopped_reason : exhausted | cap | max_records | empty_page | request_guard
+          requests       : 실제 HTTP 요청 횟수
           warning        : 절단 시 사람이 읽는 경고문
 
         ⚠️ `cap_hit` 과 `truncated` 는 다른 뜻이다.
            - truncated: 이번 호출이 덜 받았다 → max_records 를 올리면 해결될 수 있다.
            - cap_hit  : API 자체가 500건까지만 준다 → **max_records 를 올려도 해결되지 않는다.**
              연도(`pub_year` 후처리)·분류·검색어를 쪼개서 각 조각이 500 미만이 되게 해야 한다.
+
+        ⚠️ `fetched` 와 `returned` 도 구분한다. contains 로 걸러낸 결과를 `fetched` 에 덮어쓰면
+           "API 가 1건만 줬다"와 "500건 받아 1건 남겼다"가 구별되지 않는다(적대적 검증에서 검출).
         """
-        rows = min(int(page_size), MAX_PAGE_SIZE)
         # 500건을 넘겨 요청하면 API 가 오류코드 012 를 낸다 → 상한 안에서만 페이징한다.
-        ceiling = min(int(max_records), API_RECORD_CAP)
+        # 하한 1 — max_records=0 이면 한 번도 호출하지 않아 total 이 0 으로 남고,
+        # 그 결과가 '검색 결과 없음'으로 오독된다(적대적 검증 ⑫에서 확인).
+        ceiling = max(1, min(int(max_records), API_RECORD_CAP))
+        rows = max(1, min(int(page_size), MAX_PAGE_SIZE))
+        # 여러 페이지가 필요하면 **페이지 크기를 최대로 올린다.** page_size 는 전송 단위일 뿐
+        # 결과 집합을 바꾸지 않으므로, 작은 값으로 두면 같은 데이터를 받으려고 요청 수만 늘어난다.
+        # (적대적 검증에서 page_size=1·max_records=1000 조합이 **499회 요청**을 유발했다.
+        #  공공 API 에 대한 예의 문제이자 실패 확률·소요시간 문제다.)
+        if ceiling > rows:
+            rows = MAX_PAGE_SIZE
+        # 그래도 폭주하지 않도록 절대 상한을 둔다(500/1페이지당 최소 1건 가정 시에도 충분).
+        max_requests = max(2, -(-ceiling // rows) + 2)
+
         out: list[Holding] = []
         seen: set[str] = set()
         total = 0
         page = 1
+        requests_made = 0
         stopped = "exhausted"
 
         while len(out) < ceiling:
+            if requests_made >= max_requests:
+                stopped = "request_guard"
+                break
             total_p, recs, _env = self.search_page(
                 kwd, srch_target=srch_target, category=category,
                 page_num=page, page_size=rows, **extra)
+            requests_made += 1
             if total_p:
                 total = total_p
             if not recs:
@@ -154,24 +175,28 @@ class NlClient:
             time.sleep(self.throttle)
 
         out = out[:ceiling]
+        fetched = len(out)
         meta = {
             "term": kwd,
             "srch_target": srch_target,
             "category": category or "",
             "total": total,
-            "fetched": len(out),
-            "truncated": bool(total) and len(out) < total,
+            "fetched": fetched,
+            "returned": fetched,
+            "truncated": bool(total) and fetched < total,
             "cap_hit": bool(total) and total > API_RECORD_CAP,
             "api_record_cap": API_RECORD_CAP,
             "max_records": int(max_records),
+            "page_size": rows,
+            "requests": requests_made,
             "stopped_reason": stopped,
         }
         if contains:
             subs = [contains] if isinstance(contains, str) else list(contains)
             kept = [h for h in out if h.matches(subs)]
-            meta["contains_filtered_out"] = len(out) - len(kept)
+            meta["contains_filtered_out"] = fetched - len(kept)
             out = kept
-            meta["fetched"] = len(out)
+            meta["returned"] = len(out)
         if meta["truncated"]:
             meta["warning"] = _truncation_warning(meta)
         return out, meta
@@ -268,16 +293,28 @@ class NlClient:
 
 
 def _truncation_warning(meta: dict) -> str:
-    """절단 경고문 — 원인별로 처방이 다르므로 구분해서 쓴다."""
+    """절단 경고문 — 원인별로 처방이 다르므로 구분해서 쓴다.
+
+    ⚠️ 항상 **회수량(fetched)** 기준으로 서술한다. 후처리 필터로 줄어든 수(returned)로 쓰면
+       "API 가 그만큼밖에 안 줬다"와 "내가 걸러냈다"가 뒤섞인다(적대적 검증에서 검출).
+    """
     if meta["cap_hit"]:
-        return (
+        base = (
             f"⚠️ 절단됨 — API 가 보고한 total 은 {meta['total']:,}건인데 "
             f"{meta['fetched']:,}건만 회수했습니다. 국립중앙도서관 검색 API 는 "
             f"**한 검색식당 {meta['api_record_cap']}건까지만** 내려줍니다(오류코드 012 DATA LIMIT 500). "
             f"max_records 를 올려도 나머지는 받을 수 없습니다 — 검색어를 좁히거나 "
             f"연도·분류(category)로 검색식을 쪼개 각 조각이 {meta['api_record_cap']}건 미만이 되게 하세요."
         )
-    return (
-        f"⚠️ 절단됨 — total {meta['total']:,}건 중 {meta['fetched']:,}건만 회수했습니다 "
-        f"(max_records={meta['max_records']} 상한). max_records 를 올려 재수집하세요."
-    )
+    else:
+        base = (
+            f"⚠️ 절단됨 — total {meta['total']:,}건 중 {meta['fetched']:,}건만 회수했습니다 "
+            f"(max_records={meta['max_records']} 상한). max_records 를 올려 재수집하세요."
+        )
+    if meta.get("contains_filtered_out"):
+        base += (
+            f" (참고: 회수한 {meta['fetched']:,}건 중 contains 필터로 "
+            f"{meta['contains_filtered_out']:,}건이 제외돼 최종 {meta['returned']:,}건이 반환됩니다 — "
+            f"이 감소는 절단과 무관합니다.)"
+        )
+    return base

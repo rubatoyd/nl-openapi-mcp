@@ -173,7 +173,9 @@ def test_연도필터는_로컬후처리라_상한을_풀어주지_않는다(mon
 
 
 def test_contains_후처리_집계(client):
+    """fetched(회수)와 returned(필터 후)를 구분한다 — 섞으면 절단과 필터가 뒤엉킨다."""
     c = client(total=50)
     _, meta = c.search_meta("교육", contains=["존재하지않는문자열"])
     assert meta["contains_filtered_out"] == 50
-    assert meta["fetched"] == 0
+    assert meta["fetched"] == 50      # API 로부터 실제로 받은 건수
+    assert meta["returned"] == 0      # 필터를 거쳐 최종 반환한 건수

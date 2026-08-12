@@ -22,8 +22,13 @@ _HTML_TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 
 # 공식 안내서에 기재된 오류코드. 응답 키 철자는 미검증이라 후보를 넓게 본다.
-_ERROR_CODE_KEYS = ("errorCode", "errCode", "error_code", "ERR_CODE", "resultCode")
-_ERROR_MSG_KEYS = ("errorMsg", "errMsg", "error_message", "ERR_MSG", "resultMsg", "message")
+#
+# ⚠️ `resultCode` 는 **일부러 뺐다.** 국내 공공 API 는 이 키를 성공 표시로도 쓴다
+#    (`resultCode: "00"` = 정상). 적대적 검증에서 `"00"` → zfill → `"000"` → "SYSTEM ERROR" 로
+#    해석돼 **정상 응답 50건을 통째로 오류 처리**하는 거짓 양성이 재현됐다.
+#    오류 응답 봉투를 라이브로 확인하지 못한 상태이므로, 이름에 error/err 가 든 키만 신뢰한다.
+_ERROR_CODE_KEYS = ("errorCode", "errCode", "error_code", "ERR_CODE", "ERROR_CODE")
+_ERROR_MSG_KEYS = ("errorMsg", "errMsg", "error_message", "ERR_MSG", "message")
 ERROR_CODE_HINTS = {
     "000": "SYSTEM ERROR — 서버 내부 오류",
     "010": "NO KEY VALUE — 인증키가 전달되지 않음",
@@ -104,7 +109,15 @@ def _as_int(value: Any) -> int:
 
 
 def check_api_error(data: dict[str, Any]) -> None:
-    """API 가 보고한 오류를 ParseError 로 올린다 (조용한 통과 금지)."""
+    """API 가 보고한 오류를 ParseError 로 올린다 (조용한 통과 금지).
+
+    ⚠️ **레코드가 실제로 실려 있으면 오류로 보지 않는다.** 오류 봉투 철자가 미검증인 상태에서
+       키 이름만 보고 단정하면, 멀쩡한 데이터를 오류로 버리는 쪽이 훨씬 큰 피해다.
+       (조용한 통과를 막는 진짜 방어선은 `result` 키 부재 검사다 — parse_search_response 참조.)
+    """
+    items = data.get("result")
+    if isinstance(items, list) and items:
+        return
     for k in _ERROR_CODE_KEYS:
         code = data.get(k)
         if code in (None, "", "0", 0):

@@ -87,8 +87,7 @@ def cmd_collect(args) -> int:
     from .exporters import export
     fmts = args.format or ["xlsx", "csv", "json"]
     base = args.out or str(Path.home() / "nl-output")
-    name = (args.name or f"nl_{terms[0]}").replace(" ", "_")[:60]
-    for p in export(recs, fmts, base, name):
+    for p in export(recs, fmts, base, args.name or f"nl_{terms[0]}"):
         print(f"  저장: {p}")
     return 0
 

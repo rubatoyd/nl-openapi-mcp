@@ -162,9 +162,10 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
 
     from .exporters import export
     fmts = formats or ["xlsx", "csv", "json"]
-    nm = (name or f"nl_{kws[0]}").replace(" ", "_")[:60]
     base = out_dir or str(Path.home() / "nl-output")
-    out["files"] = export(recs, fmts, base, nm)
+    # 파일명 정규화는 exporters.export 가 담당한다 — 사용자 입력(name·검색어)이 경로에
+    # 닿으므로 한 곳에서 처리해야 빠뜨리지 않는다(적대적 검증에서 경로 이탈이 재현됐다).
+    out["files"] = export(recs, fmts, base, name or f"nl_{kws[0]}")
     return out
 
 
