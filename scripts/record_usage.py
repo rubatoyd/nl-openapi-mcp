@@ -9,8 +9,11 @@
   · 당일 수치가 나중에 올라가도(집계 지연) 다음 실행이 바로잡는다
 단순 append 로 짰다면 중복 행이 쌓이고 결손은 영영 못 메운다.
 
-⚠️ 트래픽 API 는 **push 권한**을 요구한다. 권한이 없으면 403 이 나는데, 그때도 실패로
-   끝내지 않고 다운로드·스타 스냅샷만 기록하고 사유를 남긴다(부분 기록이 무기록보다 낫다).
+⚠️ 트래픽 API 는 **push 권한**을 요구한다. **Actions 의 기본 `GITHUB_TOKEN` 으로는 403 이다**
+   (2026-08-12 실측 확인). 조회·클론까지 남기려면 저장소 Secrets 에 `USAGE_TOKEN` 을 넣어야 한다
+   — classic PAT(scope: `repo`) 또는 fine-grained PAT(권한: Administration → Read).
+   토큰이 없어도 실패로 끝내지 않고 다운로드·스타 스냅샷만 기록하고 `note` 에 사유를 남긴다
+   (부분 기록이 무기록보다 낫다).
 """
 from __future__ import annotations
 

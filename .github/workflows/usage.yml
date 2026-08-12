@@ -26,12 +26,18 @@ jobs:
 
       - name: 사용량 조회 → docs/usage.csv 병합
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ⚠️ 트래픽(조회·클론) API 는 **push 권한**을 요구하는데 GITHUB_TOKEN 으로는 403 이다
+          #    (실측 확인). 조회·클론까지 기록하려면 저장소 Secrets 에 `USAGE_TOKEN` 을 넣는다
+          #    — classic PAT(scope: repo) 또는 fine-grained PAT(Administration: Read).
+          #    없으면 다운로드·스타만 기록하고 note 컬럼에 사유를 남긴다.
+          GITHUB_TOKEN: ${{ secrets.USAGE_TOKEN || secrets.GITHUB_TOKEN }}
         run: python scripts/record_usage.py
 
       - name: 변경분만 커밋
         run: |
-          if git diff --quiet -- docs/usage.csv; then
+          # ⚠️ `git diff` 는 **untracked 파일을 못 본다** — 첫 실행에서 새로 만든 usage.csv 가
+          #    조용히 커밋되지 않았다(실측). status 로 판정한다.
+          if [ -z "$(git status --porcelain -- docs/usage.csv)" ]; then
             echo "변경 없음 — 커밋하지 않는다"
             exit 0
           fi
