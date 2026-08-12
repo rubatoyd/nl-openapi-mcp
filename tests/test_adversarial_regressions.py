@@ -39,10 +39,14 @@ def test_레코드가_없을_때는_오류코드를_그대로_올린다():
         parse_search_response({"errorCode": "011", "result": []})
 
 
-def test_result_키_부재는_여전히_오류다():
-    """조용한 통과를 막는 진짜 방어선은 이쪽이다 — 완화하면 안 된다."""
+def test_봉투가_아닌_응답은_여전히_오류다():
+    """조용한 통과를 막는 방어선.
+
+    ⚠️ 단, `total` 이 있으면서 `result` 만 없는 것은 **정상적인 0건**이다(라이브 실측).
+       그 구분은 test_parser.py::test_결과_0건이면_result_키가_없다_실측 가 고정한다.
+    """
     with pytest.raises(ParseError, match="result"):
-        parse_search_response({"resultCode": "00", "total": 0})
+        parse_search_response({"resultCode": "00", "msg": "no envelope"})
 
 
 # ══ ② 호출 폭주 ══════════════════════════════════════════════════════════════

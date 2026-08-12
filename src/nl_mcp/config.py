@@ -20,11 +20,52 @@ NL_BASE_URL = os.environ.get("NL_BASE_URL", "https://www.nl.go.kr")
 
 # ⚠️ API 가 한 검색식당 돌려주는 **최대 레코드 수**(공식 에러코드 012 "DATA LIMIT 500").
 #    total 이 이 값을 넘어도 501번째부터는 어떤 페이징으로도 받을 수 없다.
-#    → 검색식을 연도·분류 등으로 쪼개야 한다. 자세한 처방은 client.search_meta() 참조.
+#    ✅ 실측 확정(2026-08-12): 상한은 **레코드 오프셋 기준**이다(pageSize=10 이면 51페이지,
+#    pageSize=100 이면 6페이지에서 빈 응답 — 둘 다 누적 500건).
+#    → `category` 분할·검색어 세분화·구문검색으로 쪼개야 한다. 연도로는 쪼갤 수 없다
+#    (서버측 연도 필터 부재 실측). 자세한 처방은 client.search_meta() 참조.
 API_RECORD_CAP = int(os.environ.get("NL_API_RECORD_CAP", "500"))
 
-# pageSize 상한 (실측 100 사용 — c2 수집 스크립트가 100 으로 1,124건 회수)
-MAX_PAGE_SIZE = 100
+# pageSize 상한 — ✅ **라이브 실측(2026-08-12)**: 500 까지 받아들이고 500건을 한 번에 준다.
+# 1000 은 거부된다(반환 0건, 응답의 pageSize 에코가 null).
+# 초판은 100 으로 잡았는데(수집 스크립트가 그 값을 썼을 뿐), 그 결과 상한(500건)까지
+# 받는 데 5회를 쓰던 것이 **1회로 줄었다**.
+MAX_PAGE_SIZE = 500
+
+# `category` 가 받는 값 — ✅ **서버가 오류코드 013 메시지로 유효 목록을 직접 알려준다.**
+# ⚠️ 고급검색 UI 에는 '전체' 탭이 있지만 **API 는 '전체' 를 거부한다**(013 CATEGORY ERROR).
+#    전체 검색은 category 를 **아예 빼고** 호출해야 한다.
+# 실측(kwd=교육불평등): 도서 63 · 학위논문 66 · 잡지/학술지 9 · 기사 234 · 멀티미디어 4 ·
+#   웹사이트 3 · 외부연계자료 3 = 382 = category 생략 시 total 과 **정확히 일치**.
+#   고문헌·신문·장애인자료·해외기록물·기타는 이 검색어에서 0건(유효한 값이나 결과 없음).
+CATEGORIES = [
+    "도서", "고문헌", "학위논문", "잡지/학술지", "신문", "기사",
+    "멀티미디어", "장애인자료", "웹사이트", "해외기록물", "외부연계자료", "기타",
+]
+
+# `srchTarget` — ✅ 실측으로 **동작이 확인된 값**(2026-08-12)
+#   kwd=오욱환: author=36 · title=13 · publisher=0   ← 셋이 서로 달라 각각 해석됨이 확정
+#   kwd=교육과학사: publisher=5,973 · author=22 · total=6,095
+#   kwd=교육불평등: title=63 · keyword=41 · total=110
+#
+# ⚠️ **지원하지 않는 값은 오류가 아니라 조용히 `total`(전 필드) 검색으로 폴백한다.**
+#    판별법: 저자명을 ISBN 필드에서 찾게 하면 0건이어야 하는데 `srchTarget=isbn&kwd=오욱환`
+#    이 36건(=total 과 동일)을 냈다 → 폴백. classNo·callNo·subject·오타도 동일하다.
+#    즉 `srchTarget=isbn` 으로 ISBN 검색을 했다고 믿으면 전 필드 검색 결과를 받는다.
+SEARCH_TARGETS_VERIFIED = ("title", "author", "publisher", "keyword", "total", "kwd")
+SEARCH_TARGETS_FALLBACK = ("isbn", "issn", "classNo", "callNo", "subject", "all")
+
+# 검색 필드 ↔ API 지원 여부(실측)
+SEARCH_FIELD_LABELS = {
+    "title": "제목 — 지원(토큰 매칭). 큰따옴표로 감싸면 구문검색",
+    "author": "저자 — 지원",
+    "publisher": "발행자 — 지원",
+    "keyword": "키워드 — 지원",
+    "total": "전체 필드 — 지원",
+    "isbn": "표준부호 — ✗ 미지원(전 필드 검색으로 조용히 폴백)",
+    "classNo": "분류기호 — ✗ 미지원(전 필드 검색으로 조용히 폴백)",
+    "callNo": "청구기호 — ✗ 미지원(전 필드 검색으로 조용히 폴백)",
+}
 
 
 def get_api_key() -> str | None:

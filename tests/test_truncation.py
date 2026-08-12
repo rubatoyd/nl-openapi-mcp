@@ -111,8 +111,8 @@ def test_같은_레코드가_반복돼도_무한루프에_빠지지_않는다(mo
     monkeypatch.setattr(c, "_call", lambda p: json.dumps(
         {"total": 9999, "result": [_rec(1)]}, ensure_ascii=False))
     recs, meta = c.search_meta("반복", max_records=500)
-    assert len(recs) == 1
-    assert meta["stopped_reason"] == "empty_page"
+    assert len(recs) == 1                # 중복제거가 작동
+    assert meta["requests"] <= 3         # 폭주하지 않음
     assert meta["truncated"] is True     # total 9999 대비 1건 — 절단으로 보고
 
 

@@ -204,10 +204,31 @@ NO_FULLTEXT = {
     "imageUrl": ""
 }
 
-# 하이라이트 마크업 재구성본 — clean_html 회귀용 (라이브 미검증, 위 주의 참조)
+# 하이라이트 마크업 — 2026-08-12 **라이브 응답 원문에서 그대로 옮긴 실측값**.
+# 초판은 class 이름을 `searching-word` 로 추측했으나 실제는 `searching_txt` 였다.
+# 매칭된 **토큰마다** 개별 span 이 붙고, titleInfo 뿐 아니라 pubInfo 등 다른 필드에도 실린다.
 RAW_WITH_MARKUP = {
     **OFFLINE_FULL,
-    "titleInfo": '<span class="searching-word">\uad50\uc721\ubd88\ud3c9\ub4f1</span> :  \ud559\uad50\uad50\uc721\uc758\n   \uad6c\uc870 \ubd84\uc11d',
+    "titleInfo": ('<span class="searching_txt">교육</span> '
+                  '<span class="searching_txt">불평등</span> : '
+                  '학교<span class="searching_txt">교육</span>에 의한 '
+                  '<span class="searching_txt">불평등</span>의 재생산'),
+    "pubInfo": '<span class="searching_txt">교육</span>과학사',
+}
+
+# 실측 응답 봉투(2026-08-12) — 최상위 7개 키.
+LIVE_ENVELOPE_KEYS = ["total", "kwd", "pageNum", "pageSize", "category", "sort", "result"]
+
+# 검색 결과가 0건이면 `result` 키가 **아예 빠진다**(실측). 오류가 아니라 정상적인 빈 결과다.
+EMPTY_RESULT_ENVELOPE = {
+    "total": 0, "kwd": "없는검색어",
+    "pageNum": 1, "pageSize": 100, "category": "도서", "sort": "",
+}
+
+# 실측 오류 응답 원문(잘못된 인증키)
+INVALID_KEY_ERROR = {
+    "errorCode": "011",
+    "errorMsg": "INVALID KEY:인증키값이 유효하지 않습니다.",
 }
 
 ALL_SAMPLES = [OFFLINE_FULL, ONLINE_SPARSE, YEAR_YYYYMM, YEAR_YYYYMMDD,

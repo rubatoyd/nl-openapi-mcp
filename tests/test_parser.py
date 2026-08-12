@@ -88,12 +88,18 @@ def test_normalize_pub_year(raw, expected):
 
 
 # ── HTML 하이라이트 제거 ─────────────────────────────────────────────────────
-def test_하이라이트_태그와_개행이_제거된다():
+def test_하이라이트_태그가_제거된다():
+    """실측 마크업: 매칭 **토큰마다** `<span class="searching_txt">` 가 붙는다.
+
+    ⚠️ 태그를 지우면 토큰 사이 공백이 그대로 남는다 — 원문 제목이 `교육 불평등` 이면
+       결과도 `교육 불평등` 이지 `교육불평등` 이 아니다. 제목 비교 시 공백 정규화가 필요하다.
+    """
     h = parse_holding(samples.RAW_WITH_MARKUP)
     assert "<" not in h.title and ">" not in h.title
+    assert "searching_txt" not in h.title
     assert "\n" not in h.title
     assert "  " not in h.title           # 연속 공백 정리
-    assert "교육불평등" in h.title
+    assert h.title == "교육 불평등 : 학교교육에 의한 불평등의 재생산"
     # 원본은 raw 에 그대로 남는다
     assert "<span" in h.raw["titleInfo"]
 
@@ -132,10 +138,22 @@ def test_단건이_배열이_아니어도_받는다():
 
 
 # ── 오류를 조용히 통과시키지 않는다 ──────────────────────────────────────────
-def test_result_가_없으면_ParseError():
-    """빈 목록으로 통과시키면 인증키 오류가 '결과 0건'으로 둔갑한다."""
+def test_결과_0건이면_result_키가_없다_실측():
+    """✅ 라이브 실측(2026-08-12): 0건일 때 API 는 `result` 키를 아예 빼고 보낸다.
+
+    초판은 이것을 ParseError 로 올렸는데, 그러면 정상적인 '검색 결과 없음'이
+    매번 오류로 둔갑한다(검색어 오타·빈 분류 조회 등). total 이 있으면 빈 결과로 본다.
+    """
+    total, recs, env = parse_search_response(samples.EMPTY_RESULT_ENVELOPE)
+    assert total == 0
+    assert recs == []
+    assert env["kwd"]          # 봉투 메타는 그대로 전달된다
+
+
+def test_result_도_total_도_없으면_ParseError():
+    """봉투 자체가 아닌 응답은 여전히 오류다 — 이쪽이 조용한 통과의 진짜 방어선이다."""
     with pytest.raises(ParseError, match="result"):
-        parse_search_response({"total": 0, "msg": "nope"})
+        parse_search_response({"msg": "nope"})
 
 
 @pytest.mark.parametrize("payload, needle", [

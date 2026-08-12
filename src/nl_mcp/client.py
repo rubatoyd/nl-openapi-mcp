@@ -28,6 +28,20 @@ class NlError(RuntimeError):
     """네트워크·HTTP·응답 오류. 메시지에 인증키가 절대 들어가지 않는다."""
 
 
+def as_phrase(kwd: str) -> str:
+    """검색어를 큰따옴표로 감싸 **구문검색**으로 만든다.
+
+    ✅ 실측(2026-08-12): 이 API 의 기본 검색은 토큰 매칭이라 오탐이 많다.
+       `교육불평등` → 63건 중 제목에 그 말이 든 것은 30건(오탐 52%)
+       `"교육불평등"` → 28건, **전부 제목에 포함(오탐 0%)**
+    큰따옴표는 실제로 해석되는 유일한 검색 문법이다(작은따옴표·`=`·`^`·`&&` 는 무시된다).
+    """
+    k = (kwd or "").strip()
+    if len(k) >= 2 and k[0] == '"' and k[-1] == '"':
+        return k
+    return f'"{k}"' if k else k
+
+
 class NlClient:
     def __init__(self, api_key: str | None = None, *, throttle: float = 0.4,
                  timeout: int = 30):
@@ -80,9 +94,14 @@ class NlClient:
 
     # ── 페이지 단위 ───────────────────────────────────────────────────────────
     def search_page(self, kwd: str, *, srch_target: str = "title", category: str | None = None,
-                    page_num: int = 1, page_size: int = MAX_PAGE_SIZE,
+                    page_num: int = 1, page_size: int = MAX_PAGE_SIZE, exact: bool = False,
                     **extra) -> tuple[int, list[Holding], dict]:
-        """1페이지 조회 → (total, 레코드, 봉투 메타)."""
+        """1페이지 조회 → (total, 레코드, 봉투 메타).
+
+        exact=True 면 검색어를 큰따옴표로 감싼 **구문검색**을 한다(as_phrase 참조).
+        """
+        if exact:
+            kwd = as_phrase(kwd)
         params = {
             "srchTarget": srch_target,
             "kwd": kwd,
@@ -213,11 +232,17 @@ class NlClient:
                           **extra) -> tuple[list[Holding], dict]:
         """여러 검색어를 **각각 조회해 합집합** + 축별 회수 메타.
 
-        국립중앙도서관 검색식에는 필드 내 OR 연산자가 없으므로 변형어별 개별검색 합집합이 정석이다
-        (KCI 에서 검증된 것과 같은 전략).
+        검색어별 개별조회 합집합을 쓰는 이유는 두 가지다.
+        ① 한 검색식당 500건 상한이 있으므로 **쪼갤수록 회수량이 늘어난다**(가장 확실한 우회책).
+        ② `kwd` 하나로 OR 을 표현하는 문법이 API 에 있는지 **확인되지 않았다**.
+        ⚠️ 다만 국립중앙도서관 **고급검색 UI 에는 필드 간 AND/OR/NOT 선택이 있다**(2026-08-12 확인).
+           즉 검색식 표현력이 이보다 클 가능성이 있으며, API 가 그것을 노출하는지는 미검증이다
+           → `scripts/probe_api.py` 로 확인 후 이 전략을 정교화할 것.
 
-        연도 필터는 API 파라미터가 아니라 **회수 후 로컬 후처리**다 —
-        `pub_year` 는 정규화된 4자리 연도이고, 원문 `pubYearInfo` 는 형식이 뒤섞여 있다.
+        연도 필터는 **회수 후 로컬 후처리**다(`pub_year` 4자리 정규화 기준).
+        ⚠️ 로컬 필터라 500 상한을 풀어주지 않는다. 고급검색 UI 에는 '발행년 …부터' **서버측
+           범위 필터**가 있으므로, API 가 같은 파라미터를 받는다면 연도 슬라이싱으로 상한을
+           우회할 수 있다 — 파라미터명이 확인되면 `**extra` 로 넘겨 쓸 수 있다.
         """
         terms = [t.strip() for t in (terms or []) if t and t.strip()]
         out: list[Holding] = []
@@ -276,7 +301,10 @@ class NlClient:
             warns.append(
                 f"⚠️ API 500건 상한에 걸린 검색어: {', '.join(meta['cap_hit_terms'])}. "
                 f"이 검색어들은 max_records 를 올려도 501번째부터 받을 수 없습니다 — "
-                f"연도·분류로 검색식을 쪼개세요."
+                f"① category 를 자료구분별로 나눠 각각 조회하거나(자료구분별 total 의 합이 "
+                f"전체와 일치함이 실측 확인됨) ② 검색어를 더 좁게 쪼개거나 "
+                f"③ exact=True 로 구문검색하면 total 자체가 줄어듭니다. "
+                f"**연도로는 쪼갤 수 없습니다** — 서버측 연도 필터가 없습니다(실측)."
             )
         if stopped_early or len(axes) < len(terms):
             warns.append(
@@ -303,8 +331,9 @@ def _truncation_warning(meta: dict) -> str:
             f"⚠️ 절단됨 — API 가 보고한 total 은 {meta['total']:,}건인데 "
             f"{meta['fetched']:,}건만 회수했습니다. 국립중앙도서관 검색 API 는 "
             f"**한 검색식당 {meta['api_record_cap']}건까지만** 내려줍니다(오류코드 012 DATA LIMIT 500). "
-            f"max_records 를 올려도 나머지는 받을 수 없습니다 — 검색어를 좁히거나 "
-            f"연도·분류(category)로 검색식을 쪼개 각 조각이 {meta['api_record_cap']}건 미만이 되게 하세요."
+            f"max_records 를 올려도 나머지는 받을 수 없습니다 — `category` 분할·검색어 세분화·"
+            f"`exact=True` 구문검색으로 각 조각이 {meta['api_record_cap']}건 미만이 되도록 쪼개세요. "
+            f"(⚠️ 서버측 연도 필터는 없으므로 **연도로는 쪼갤 수 없습니다** — 실측 확인)"
         )
     else:
         base = (

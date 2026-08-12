@@ -32,8 +32,9 @@ _ERROR_MSG_KEYS = ("errorMsg", "errMsg", "error_message", "ERR_MSG", "message")
 ERROR_CODE_HINTS = {
     "000": "SYSTEM ERROR — 서버 내부 오류",
     "010": "NO KEY VALUE — 인증키가 전달되지 않음",
-    "011": "INVALID KEY — 유효하지 않은 인증키",
+    "011": "INVALID KEY — 유효하지 않은 인증키",       # ✅ 실측 확인(2026-08-12)
     "012": "DATA LIMIT 500 — 한 검색식당 500건 초과 조회 불가",
+    "013": "CATEGORY ERROR — category 값이 유효하지 않음(서버가 유효 목록을 함께 알려준다)",
     "101": "SEARCH ERROR — 검색 조건 또는 검색 서버 오류",
 }
 
@@ -163,8 +164,27 @@ def parse_search_response(body: str | dict[str, Any]) -> tuple[int, list[Holding
     check_api_error(data)
 
     if "result" not in data:
+        # ✅ 라이브 실측(2026-08-12): **검색 결과가 0건이면 `result` 키 자체가 없다.**
+        #    응답은 `{"total":0,"kwd":…,"pageNum":…,"pageSize":…,"category":…,"sort":…}` 이다.
+        #    초판은 이것을 오류로 올렸는데, 그러면 정상적인 '결과 없음'이 매번 오류로 둔갑한다
+        #    (검색어 오타·빈 분류 조회 등 흔한 경우 전부).
+        #
+        # ⚠️ 그렇다고 `result` 부재를 **무조건** 0건으로 보면 안 된다. `total` 이 0 이 아닌데
+        #    `result` 가 없다면 그것은 정상적인 빈 결과가 아니라 **레코드가 통째로 사라진 것**이고,
+        #    빈 목록으로 통과시키면 조용한 절단이 된다. 실측상 이 조합은 나타나지 않으므로
+        #    이상 신호로 보고 오류로 올린다. (적대적 검증에서 이 구멍이 지적됐다.)
+        total_v = _as_int(data.get("total")) if "total" in data else None
+        envelope = {k: v for k, v in data.items() if k != "result"}
+        if total_v == 0:
+            return 0, [], envelope
+        if total_v is not None:
+            raise ParseError(
+                f"응답에 `result` 가 없는데 total 은 {total_v:,}건입니다 — 정상적인 '결과 0건'이 "
+                f"아닙니다(0건일 때만 result 가 생략됩니다). 레코드가 누락된 응답으로 보입니다."
+            )
         keys = ", ".join(list(data)[:12]) or "(키 없음)"
-        raise ParseError(f"응답에 `result` 가 없습니다 — 검색결과 봉투가 아닙니다. 최상위 키: {keys}")
+        raise ParseError(
+            f"응답에 `result` 도 `total` 도 없습니다 — 검색결과 봉투가 아닙니다. 최상위 키: {keys}")
 
     items = data.get("result") or []
     if isinstance(items, dict):      # 단건일 때 배열이 아닐 가능성에 대비
