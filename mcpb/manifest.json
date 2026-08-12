@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "nl-openapi-mcp",
   "display_name": "국립중앙도서관 소장자료 검색기 (nl-openapi-mcp)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "국립중앙도서관 소장자료 검색 OpenAPI 수집기 — 단행본·온라인자료 서지, KDC 분류, 청구기호, 원문 제공 여부. 500건 상한 절단을 명시적으로 보고합니다. xlsx/csv/json/sqlite 내보내기",
   "author": { "name": "Yeondong Yang", "url": "https://github.com/rubatoyd/nl-openapi-mcp" },
   "homepage": "https://github.com/rubatoyd/nl-openapi-mcp",
@@ -40,8 +40,8 @@
   },
   "tools": [
     { "name": "nl_status", "description": "연결 점검 — 인증키 유효성 + 소장자료 검색 API 실제 왕복 1회" },
-    { "name": "nl_search", "description": "소장자료 검색 — total·truncated·cap_hit(500건 API 상한) 동반 반환" },
-    { "name": "nl_collect", "description": "다중 검색어 합집합 수집 → xlsx/csv/json/sqlite 저장. 상한에 걸린 검색어를 지목" }
+    { "name": "nl_search", "description": "소장자료 검색 — total·truncated·cap_hit(500건 API 상한) 동반 반환. exact=true 로 구문검색(오탐 제거)" },
+    { "name": "nl_collect", "description": "다중 검색어 합집합 수집 → xlsx/csv/json/sqlite 저장. auto_partition 으로 자료구분 분할 수집(500 상한 4~9배 회복), exact 로 구문검색" }
   ],
   "compatibility": {
     "platforms": ["win32", "darwin", "linux"],

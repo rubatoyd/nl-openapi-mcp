@@ -144,7 +144,7 @@ AND/OR/NOT 은 연산자가 아니라 그냥 토큰이다(`kwd=AND` 단독 검�
   ⚠️ 구 네임스페이스 `io.github.rubato103/…` v0.1.0 도 **active 고아로 남는다**(회수 불가, kci 동일).
 - ✅ **자료구분 자동 분할 수집** (`nl_collect(auto_partition=True)`) — 500 상한 부분 우회.
   실측 **4.3~9.1배** 회복(교육복지 500→2,134 · 교육 500→4,559). 전수는 아니며
-  남은 도달불가 건수를 `unreachable` 로 보고한다. **v0.2.0 태그에는 없고 main 에만 있다.**
+  남은 도달불가 건수를 `unreachable` 로 보고한다. **v0.3.0 에 포함.**
 - ✅ **자체완결 바이너리 클린 검증** — win-x64 `.mcpb` 를 Python·uv 없는 환경(`env -i`)에서
   직접 실행: 기동·도구 3종·**실제 HTTPS 왕복**(total 82,769) 성공, truststore 경고 0건.
   cwd 를 프로젝트 밖에 두어 `.env` 유입이 없음도 확인(`has_api_key:false`).
