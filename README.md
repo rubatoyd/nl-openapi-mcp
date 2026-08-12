@@ -4,6 +4,15 @@
 
 [![CI](https://github.com/rubatoyd/nl-openapi-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/rubatoyd/nl-openapi-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rubatoyd/nl-openapi-mcp)](https://github.com/rubatoyd/nl-openapi-mcp/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/rubatoyd/nl-openapi-mcp/total?label=downloads)](https://github.com/rubatoyd/nl-openapi-mcp/releases)
+
+<!-- usage:start -->
+> 📈 **사용량** — 최근 14일 조회 **7**회(고유 4) · 클론 **94**회(고유 32) · 릴리스 자산 누적 다운로드 **70**
+>
+> ![일별 클론·조회 추이](docs/usage.svg)
+>
+> <sub>2026-08-12 자동 갱신 · 전체 이력은 [`docs/usage.csv`](docs/usage.csv). GitHub 트래픽 통계는 14일 창만 제공하므로 이 저장소가 매일 찍어 누적한다.</sub>
+<!-- usage:end -->
 
 **국립중앙도서관 소장자료 검색** OpenAPI 를 Claude 등 MCP 클라이언트에서 바로 쓰는 서버 + CLI.
 단행본·온라인자료의 서지, KDC 분류, 청구기호, 원문 제공 여부를 검색·수집하고
@@ -219,10 +228,12 @@ nl collect --kwd 교육복지 --category 도서 --auto-partition --sort-depth 1 
 ## 검증 상태
 
 - ✅ 응답 스키마 24개 필드 — **실응답 1,124건** 전수 집계로 확정
-- ✅ 500건 상한 — 공식 오류코드 + 실제 수집 로그로 확인
-- ✅ 오프라인 회귀 66건 · MCP stdio 핸드셰이크 · CI 콜드 스타트 스모크
-- ❓ `srchTarget` 의 `title` 외 값, `sort`, 오류 응답 키 철자 — **라이브 미검증**
-  (2026-08-12 현재 `www.nl.go.kr` 접속 불가). 코드는 이 항목들에 의존하지 않습니다.
+- ✅ 500건 상한 — 공식 오류코드 + 실제 수집 로그 + 오프셋 기준까지 실측
+- ✅ **호출 규격 라이브 전수 검증** — `srchTarget` 지원/폴백, `category` 12종, `sort` 색인 필드명,
+  `ipub_year` 연도 필터, f-슬롯 불리언, 오류 봉투, 0건 응답 형태. `scripts/probe_api.py` 로 재현 가능
+- ✅ 오프라인 회귀 **186건** · MCP stdio 핸드셰이크 · CI 콜드 스타트 스모크 ·
+  자체완결 바이너리 클린 환경 검증
+- ⚠️ 서버측 **연도 범위**(from~to) 필터만 미확인 — 단일 연도(`ipub_year`)는 동작합니다
 
 ---
 
