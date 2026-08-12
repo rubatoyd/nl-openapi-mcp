@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 EXPECTED_TOOLS = {"nl_status", "nl_search", "nl_collect"}
 
@@ -28,11 +29,28 @@ def main() -> int:
     # ⚠️ Windows 는 기본 로케일이 cp949 라 UTF-8 인 도구 설명(한글)에서 디코딩이 깨진다.
     #    부모·자식 양쪽에서 UTF-8 을 명시해야 한다.
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
-    proc = subprocess.run(
+
+    # ⚠️ `subprocess.run(input=…)` 은 쓰기 직후 stdin 을 닫는다. 서버가 마지막 요청의
+    #    응답을 내보내기 **전에** EOF 로 종료해 버리는 경합이 생겨 tools/list 가 간헐적으로
+    #    비었다(CI 에서 먼저 관측된 것과 같은 현상). stdin 을 잠깐 열어둔 뒤 닫는다.
+    proc = subprocess.Popen(
         [sys.executable, "-m", "nl_mcp.server"],
-        input=payload, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env, timeout=60,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", env=env,
     )
+    proc.stdin.write(payload)
+    proc.stdin.flush()
+    time.sleep(3)                 # 응답을 받아낼 여유
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
+    try:
+        out, err = proc.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+    proc = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
     responses = {}
     for line in proc.stdout.splitlines():
