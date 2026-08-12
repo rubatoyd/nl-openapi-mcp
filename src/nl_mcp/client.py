@@ -17,6 +17,7 @@ from .config import (
     API_RECORD_CAP,
     CATEGORIES,
     MAX_PAGE_SIZE,
+    PARTITION_AXES,
     SEARCH_API_URL,
     require_api_key,
     use_os_trust,
@@ -231,7 +232,99 @@ class NlClient:
         """레코드만 반환하는 얇은 래퍼. 절단 여부까지 필요하면 search_meta() 를 쓴다."""
         return self.search_meta(kwd, **kw)[0]
 
-    # ── 자료구분 분할 — 500 상한을 부분적으로 우회 ────────────────────────────
+    # ── 다축 재귀 분할 — 500 상한을 부분적으로 우회 ───────────────────────────
+    def search_partitioned_meta(self, kwd: str, *, axes=None, max_depth: int = 2,
+                                max_records: int = API_RECORD_CAP * 12,
+                                page_size: int = MAX_PAGE_SIZE, **extra
+                                ) -> tuple[list[Holding], dict]:
+        """서버측 축으로 검색 공간을 **재귀 분할**해 500 상한을 넘겨 회수한다.
+
+        ✅ 실측 축(2026-08-12) — 응답 필드명을 파라미터로 넘겨 찾았다:
+          `category`(완전분할) · `manageName`(완전분할) · `licYn`(손실 있음)
+          나머지(kdcCode1s·classNo·typeCode·docYn·regDate·lang …)는 전부 무시된다.
+
+        핵심 설계: **부모 조각도 상한까지 받아 합집합에 넣는다.** 어떤 축은 값이 빈 레코드를
+        선택할 수 없어(licYn 이 그렇다) 조각의 합이 부모보다 작다. 부모를 함께 넣으면
+        그런 축을 써도 **손해가 나지 않는다**(합집합은 항상 부모 이상).
+
+        실측 회복(`교육복지` 전체 7,028건):
+          분할 없음 500 → category 만 2,134(30%) → category×licYn 3,370(48%)
+
+        ⚠️ 전수는 여전히 불가능하다. 호출 수는 축과 깊이에 따라 수십 회로 는다.
+        """
+        axis_list = list(axes if axes is not None else PARTITION_AXES)
+        axis_names = {a[0] for a in axis_list}
+        # 호출자가 이미 고정한 축 값은 fixed 로 옮겨 extra 와 중복 전달되지 않게 한다
+        preset = {k: v for k, v in extra.items() if k in axis_names and v}
+        extra = {k: v for k, v in extra.items() if k not in axis_names}
+        out: list[Holding] = []
+        seen: set[str] = set()
+        nodes: list[dict] = []
+        requests = 0
+
+        def take(recs) -> int:
+            new = 0
+            for h in recs:
+                k = h.dedup_key()
+                if k in seen:
+                    continue
+                seen.add(k)
+                out.append(h)
+                new += 1
+            return new
+
+        def walk(fixed: dict, depth: int) -> None:
+            nonlocal requests
+            if len(out) >= max_records:
+                return
+            recs, m = self.search_meta(
+                kwd, max_records=min(API_RECORD_CAP, max_records - len(out)),
+                page_size=page_size, **fixed, **extra)
+            requests += m["requests"]
+            new = take(recs)
+            nodes.append({"fixed": dict(fixed), "depth": depth, "total": m["total"],
+                          "fetched": m["fetched"], "new": new, "cap_hit": m["cap_hit"]})
+            # 상한에 걸렸고 아직 쓸 축이 남았으면 더 쪼갠다
+            if not m["cap_hit"] or depth >= max_depth or depth >= len(axis_list):
+                return
+            name, values = axis_list[depth]
+            if name in fixed:           # 호출자가 이미 고정한 축은 건너뛴다
+                return
+            for v in values:
+                if len(out) >= max_records:
+                    break
+                walk({**fixed, name: v}, depth + 1)
+                time.sleep(self.throttle)
+
+        walk(preset, 0)
+        out = out[:max_records]
+
+        leaves = [n for n in nodes if n["cap_hit"]]
+        meta = {
+            "term": kwd,
+            "mode": "recursive_partition",
+            "axes": [a[0] for a in axis_list[:max_depth]],
+            "max_depth": max_depth,
+            "nodes": len(nodes),
+            "fetched": len(out),
+            "root_total": nodes[0]["total"] if nodes else 0,
+            "still_capped": [n["fixed"] for n in leaves if n["depth"] >= max_depth],
+            "requests": requests,
+            "api_record_cap": API_RECORD_CAP,
+        }
+        root = meta["root_total"]
+        if root > len(out):
+            meta["unreachable"] = root - len(out)
+            meta["warning"] = (
+                f"⚠️ 분할 수집으로 {len(out):,}건을 회수했으나 전수가 아닙니다 "
+                f"(전체 {root:,}건, 도달불가 {root - len(out):,}건). "
+                f"축 {'→'.join(meta['axes'])} 로 {len(nodes)}개 조각을 훑었고 "
+                f"{len(meta['still_capped'])}개 조각이 여전히 500건을 넘습니다. "
+                f"검색어를 더 좁히거나 exact 로 total 자체를 줄이는 방법뿐입니다."
+            )
+        return out, meta
+
+    # ── 자료구분 1단 분할 (하위 호환) ─────────────────────────────────────────
     def search_by_category_meta(self, kwd: str, *, categories=None,
                                 max_records: int = API_RECORD_CAP * len(CATEGORIES),
                                 page_size: int = MAX_PAGE_SIZE, **extra
@@ -303,7 +396,7 @@ class NlClient:
                           category: str | None = None, max_records: int = 2000,
                           page_size: int = MAX_PAGE_SIZE, contains=None,
                           year_from: int | None = None, year_to: int | None = None,
-                          auto_partition: bool = False,
+                          auto_partition: bool = False, partition_depth: int = 2,
                           **extra) -> tuple[list[Holding], dict]:
         """여러 검색어를 **각각 조회해 합집합** + 축별 회수 메타.
 
@@ -337,8 +430,8 @@ class NlClient:
             # 500 상한에 걸렸고 자료구분을 지정하지 않았다면, 자료구분별로 나눠 다시 받는다.
             # (자료구분은 겹치지 않는 완전 분할임이 실측 확인됐다 — search_by_category_meta 참조)
             if auto_partition and m["cap_hit"] and not category:
-                p_recs, p_meta = self.search_by_category_meta(
-                    term, srch_target=srch_target,
+                p_recs, p_meta = self.search_partitioned_meta(
+                    term, srch_target=srch_target, max_depth=partition_depth,
                     max_records=max(max_records - len(out), API_RECORD_CAP),
                     page_size=page_size, **extra)
                 if len(p_recs) > len(recs):      # 실제로 이득일 때만 교체

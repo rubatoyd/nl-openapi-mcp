@@ -146,6 +146,7 @@ def nl_search(kwd: str, srch_target: str = "title", exact: bool = False,
 def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
                srch_target: str = "title", exact: bool = False,
                category: str | None = None, auto_partition: bool = False,
+               partition_depth: int = 2,
                year_from: int | None = None, year_to: int | None = None,
                contains: list[str] | None = None, formats: list[str] | None = None,
                max_records: int = 500, out_dir: str | None = None,
@@ -163,12 +164,15 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
       `contains` 후처리로 하라.** exact 는 전체 표제를 아는 특정 자료 조회용이다.
     category: 도서·학위논문·잡지/학술지·기사 등. ⚠️ "전체" 는 오류(013) — 생략할 것.
     auto_partition: **500 상한 우회.** 검색어가 상한에 걸리고 category 를 지정하지 않았으면
-      자료구분별로 나눠 재수집한다. 자료구분별 total 의 합이 생략 시 total 과 정확히 일치함이
-      실측 확인됐다(교육복지 7,028=7,028 · 교육 784,809=784,809).
-      실측 회복량: `교육복지` 500 → 2,134건(4.3배) · `교육` 500 → 4,559건(9.1배).
-      ⚠️ **전수는 아니다** — 개별 자료구분도 500을 넘을 수 있다(교육복지 기사 3,879).
-         `meta.axes[].partition.capped_categories` 와 `unreachable` 이 남은 손실을 보고한다.
-         호출 수가 자료구분 수만큼 늘어난다(최대 12배).
+      서버측 축으로 **재귀 분할**해 재수집한다. 축은 실측으로 찾은 3개다 —
+      `category` → `manageName`(둘 다 완전분할) → `licYn`(값이 빈 레코드는 못 잡음).
+      상한에 걸린 조각만 다음 축으로 더 쪼개고, **부모 조각도 합집합에 넣어** 불완전한
+      축을 써도 손해가 나지 않게 한다.
+    partition_depth: 분할 깊이(1~3, 기본 2). 실측 회복량(`교육복지` 전체 7,028건):
+      분할 없음 500(7%) → 깊이1 2,134(30%) → 깊이2 3,265(46%) → 깊이3 4,722(67%).
+      ⚠️ 호출 수가 함께 는다(13 → 25 → 60회). 깊이 3은 코퍼스 전수성이 중요할 때만.
+      ⚠️ **전수는 여전히 불가능하다.** `meta.axes[].partition.unreachable` 과
+         `still_capped` 가 못 받은 건수와 남은 조각을 보고한다.
     contains: 결과 텍스트 부분일치 후처리. year_from/year_to: 발행연도 필터.
     formats: xlsx/csv/json/sqlite (기본 3종). save=false 면 저장 없이 미리보기만.
     out_dir 미지정 시 홈의 nl-output/. extra_params: 임의 API 파라미터 전달.
@@ -193,7 +197,7 @@ def nl_collect(terms: list[str] | None = None, kwd: str | None = None,
     try:
         recs, meta = NlClient().search_terms_meta(
             kws, srch_target=srch_target, category=category,
-            auto_partition=auto_partition,
+            auto_partition=auto_partition, partition_depth=max(1, min(partition_depth, 3)),
             year_from=year_from, year_to=year_to, contains=contains,
             max_records=max_records, **extra)
     except NlError as e:

@@ -145,9 +145,14 @@ AND/OR/NOT 은 연산자가 아니라 그냥 토큰이다(`kwd=AND` 단독 검�
 - ✅ **레지스트리 발행 확인** — `io.github.rubatoyd/nl-openapi-mcp v0.2.0 status:active`,
   `fileSha256` 가 실제 자산 해시와 일치(망 밖 경로로 조회).
   ⚠️ 구 네임스페이스 `io.github.rubato103/…` v0.1.0 도 **active 고아로 남는다**(회수 불가, kci 동일).
-- ✅ **자료구분 자동 분할 수집** (`nl_collect(auto_partition=True)`) — 500 상한 부분 우회.
-  실측 **4.3~9.1배** 회복(교육복지 500→2,134 · 교육 500→4,559). 전수는 아니며
-  남은 도달불가 건수를 `unreachable` 로 보고한다. **v0.3.0 에 포함.**
+- ✅ **다축 재귀 분할 수집** (`nl_collect(auto_partition=True, partition_depth=1~3)`) —
+  500 상한 부분 우회. 서버측 축은 실측 탐색으로 셋만 확인됐다:
+  `category`·`manageName`(완전분할) · `licYn`(값이 빈 레코드는 못 잡음).
+  `kdcCode1s`·`typeCode`·`docYn`·`regDate`·`lang` 등 나머지는 전부 무시된다.
+  ⚠️ 이름 대칭 가정 금지 — `kdcCode1s`는 무시되나 `kdcName1s`는 동작, `licYn`은 되나 `docYn`은 안 됨.
+  **부모 조각도 합집합에 넣어** 불완전한 축을 써도 손해가 없게 했다.
+  실측(교육복지 7,028): 500(7%) → 깊이1 2,134(30%) → 깊이2 3,265(46%) → 깊이3 4,722(67%).
+  요청 수는 13→25→60. 전수는 여전히 불가.
 - ✅ **자체완결 바이너리 클린 검증** — win-x64 `.mcpb` 를 Python·uv 없는 환경(`env -i`)에서
   직접 실행: 기동·도구 3종·**실제 HTTPS 왕복**(total 82,769) 성공, truststore 경고 0건.
   cwd 를 프로젝트 밖에 두어 `.env` 유입이 없음도 확인(`has_api_key:false`).
