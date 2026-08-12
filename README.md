@@ -101,6 +101,32 @@ uv run pytest -q
 > 클라우드 동기화 폴더(OneDrive 등)에서 작업한다면 venv 를 **폴더 밖**에 두세요:
 > `UV_PROJECT_ENVIRONMENT=~/.venvs/nl-openapi-mcp`
 
+### 4) 다른 MCP 클라이언트
+
+표준 stdio MCP 서버이므로 MCP 를 지원하는 에이전트면 그대로 붙습니다 — Cursor · Windsurf ·
+Cline · Zed · VS Code Copilot(agent mode) · OpenAI Agents SDK · 자체 클라이언트 등.
+위 `command`/`args`/`env` 3요소를 각 클라이언트 설정에 옮기면 됩니다.
+
+#### 전송 방식 — stdio(기본) · SSE · Streamable HTTP
+
+로컬 서브프로세스뿐 아니라 **HTTP 로도 띄울 수 있습니다.** 원격 호스팅이나 stdio 를 못 쓰는
+클라이언트를 위한 경로입니다.
+
+```bash
+nl-mcp                                # stdio (기본)
+nl-mcp --transport streamable-http    # http://127.0.0.1:8000/mcp
+nl-mcp --transport sse --port 9000    # http://127.0.0.1:9000/sse
+```
+
+환경변수: `NL_MCP_TRANSPORT` · `NL_MCP_HOST` · `NL_MCP_PORT`.
+
+> ⚠️ **HTTP 전송에는 인증이 없습니다.** 기본 바인드는 루프백(`127.0.0.1`)이라 같은 PC 에서만
+> 접근됩니다. `--host 0.0.0.0` 으로 외부에 열면 **인증키를 품은 서버를 그대로 공개하는 것**과
+> 같습니다 — 신뢰된 망에서만 쓰세요. 서버도 기동 시 경고를 찍습니다.
+
+> **Claude 앱 안에서 검색해 설치할 수는 없습니다.** 공식 MCP 레지스트리 등재와 Claude Desktop
+> 인앱 커넥터 디렉터리는 별개이고 자동 동기화되지 않습니다. 위 설치 방법 중 하나를 쓰세요.
+
 ---
 
 ## 인증키
@@ -136,6 +162,10 @@ cp .env.example .env   # NL_API_KEY 를 채워 넣으세요 (.env 는 gitignore 
 
 `nl_collect` 가 세 검색어를 각각 조회해 `id` 기준으로 합집합을 만들고, 상한에 걸린 검색어가
 있으면 `meta.cap_hit_terms` 로 지목합니다.
+
+> **출력 파일명은 정규화됩니다.** `name` 을 지정하지 않으면 검색어가 그대로 파일명이 되므로,
+> 경로 구분자·`..`·윈도 금지문자는 제거되고 결과는 항상 `out_dir` 안에만 저장됩니다.
+> 한글 파일명은 그대로 보존됩니다.
 
 ---
 
