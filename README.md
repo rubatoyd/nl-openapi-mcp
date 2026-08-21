@@ -7,11 +7,11 @@
 [![Downloads](https://img.shields.io/github/downloads/rubatoyd/nl-openapi-mcp/total?label=downloads)](https://github.com/rubatoyd/nl-openapi-mcp/releases)
 
 <!-- usage:start -->
-> 📈 **사용량** — 최근 14일 조회 **17**회(고유 4) · 클론 **267**회(고유 104) · 릴리스 자산 누적 다운로드 **132**
+> 📈 **사용량** — 최근 14일 조회 **17**회(고유 4) · 클론 **274**회(고유 110) · 릴리스 자산 누적 다운로드 **138**
 >
 > ![일별 클론·조회 추이](docs/usage.svg)
 >
-> <sub>2026-08-20 자동 갱신 · 전체 이력은 [`docs/usage.csv`](docs/usage.csv). GitHub 트래픽 통계는 14일 창만 제공하므로 이 저장소가 매일 찍어 누적한다.</sub>
+> <sub>2026-08-21 자동 갱신 · 전체 이력은 [`docs/usage.csv`](docs/usage.csv). GitHub 트래픽 통계는 14일 창만 제공하므로 이 저장소가 매일 찍어 누적한다.</sub>
 <!-- usage:end -->
 
 **국립중앙도서관 소장자료 검색** OpenAPI 를 Claude 등 MCP 클라이언트에서 바로 쓰는 서버 + CLI.
